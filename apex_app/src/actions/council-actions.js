@@ -196,6 +196,11 @@ export function councilActions(councilService) {
               method: p.method,
               limitations: p.limitations,
               assumptions: p.assumptions,
+              // T-37 Step 2: the Values & Constraints Core travels with its own rule-by-rule
+              // evaluation. The other seven perspectives have no such field and it stays undefined
+              // for them rather than being filled with an empty object.
+              ...(p.evaluation === undefined ? {} : { evaluation: p.evaluation }),
+              ...(p.values === undefined ? {} : { values: p.values }),
             })),
             authorizesExecution: false,
           },
@@ -407,7 +412,7 @@ export function councilActions(councilService) {
   ];
 }
 
-export function createCouncilService({ dataDir, now, idFactory, registry, reasoning = null }) {
+export function createCouncilService({ dataDir, now, idFactory, registry, reasoning = null, controlPlane = null }) {
   const store = new CouncilStore(`${dataDir}/council.jsonl`, { now, idFactory });
   // Gathered evidence comes from the existing ReasoningService, which is the bounded read owner
   // across memory, knowledge, world model, documents and situational observations. The council
@@ -424,6 +429,34 @@ export function createCouncilService({ dataDir, now, idFactory, registry, reason
   return new CouncilService({
     store,
     capabilityLookup: (name) => registry.get(name),
+    // T-38 Step 1: the registry itself, so a deliberation whose objective names no candidate can
+    // resolve one deterministically from the sentence (see council/candidate-resolver.js).
+    registry,
+    // T-37 Step 2: a candidate may be named by the id of a registered capability. Resolving one is a
+    // read of the registry - it creates nothing and authorizes nothing - and it is what lets the
+    // constraint core evaluate a real declaration instead of reporting every rule unverifiable.
+    // A name the registry does not hold resolves to null, which the core reports honestly.
+    context: {
+      candidate: (candidateId) => {
+        if (typeof candidateId !== 'string' || candidateId.length === 0 || candidateId.length > 128) return null;
+        const definition = registry.get(candidateId);
+        if (!definition) return null;
+        return {
+          id: candidateId,
+          action: candidateId,
+          name: definition.name ?? candidateId,
+          description: definition.description ?? `run ${candidateId}`,
+        };
+      },
+    },
+    // T-37 Step 2: the constraint core's lockdown rule reads the same latch the ECP enforces. It is a
+    // read of the latch's state, not a handle to it: the Council cannot engage or release anything.
+    latchLookup: controlPlane && typeof controlPlane.killSwitchStatus === 'function'
+      ? () => {
+        const status = controlPlane.killSwitchStatus();
+        return { active: status?.active === true, policyUnavailable: status?.policyUnavailable === true };
+      }
+      : null,
     evidenceProvider,
     evidenceProviderName: evidenceProvider ? 'reasoning' : null,
     now,

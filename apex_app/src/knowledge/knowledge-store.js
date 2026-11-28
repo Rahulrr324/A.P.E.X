@@ -13,7 +13,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { JsonlStore } from '../memory/jsonl-store.js';
 import { WriterLock } from '../memory/writer-lock.js';
 import { StoreError, ValidationError } from '../errors.js';
-import { CONTROL_CHARS, parseIsoInstant, shortId } from '../util.js';
+import { CONTROL_CHARS, parseIsoInstant, shortId, singleLine } from '../util.js';
 import { containsSecret } from '../security/secrets.js';
 import { normalizeTokens, queryTokens } from '../retrieval/normalize.js';
 import { queryWeights } from '../retrieval/relevance.js';
@@ -1013,6 +1013,81 @@ export class KnowledgeStore {
     const certification = { key: null };
     const records = await this.#loadComplete({ certification });
     return knowledgeWindow(records, limit, this.#derive(records, certification.key));
+  }
+
+  // A bounded chronological projection of claims and lifecycle decisions, all from one complete
+  // owner read. The timeline exposes provenance and lifecycle references, not a new source of truth;
+  // each claim, retraction, and resolution remains in the same append-only knowledge log.
+  async timeline({ limit = 20 } = {}) {
+    const size = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 20;
+    const certification = { key: null };
+    const records = await this.#loadComplete({ certification });
+    const lifecycle = this.#derive(records, certification.key);
+    const claimsById = new Map(lifecycle.claims.map((record) => [record.id, annotate(
+      record, lifecycle.supersededByMap, lifecycle.conflictIndex,
+      lifecycle.retractionsByTarget, lifecycle.resolutionIndex,
+    )]));
+    const items = records.map((record, index) => {
+      const provenance = {
+        origin: record.provenance?.origin ?? null,
+        operationId: record.provenance?.operationId ?? null,
+        updateMode: record.provenance?.updateMode ?? null,
+        ...(record.provenance?.document ? {
+          document: {
+            documentId: record.provenance.document.documentId ?? null,
+            version: record.provenance.document.version ?? null,
+            section: record.provenance.document.section ?? null,
+            locator: record.provenance.document.locator ?? null,
+          },
+        } : {}),
+      };
+      if (record.kind === RETRACTION_KIND) {
+        return {
+          id: record.id,
+          kind: 'retraction',
+          at: record.createdAt,
+          summary: `Retracted claim ${shortId(record.targetId)}${record.reason ? `: ${singleLine(record.reason, 180)}` : ''}`,
+          status: 'retracted',
+          targetIds: [record.targetId],
+          provenance,
+          _index: index,
+        };
+      }
+      if (record.kind === RESOLUTION_KIND) {
+        return {
+          id: record.id,
+          kind: 'resolution',
+          at: record.createdAt,
+          summary: `Recorded a choice for ${record.targetIds.length} conflicting claim(s); selected ${shortId(record.chosenId)}${record.reason ? `: ${singleLine(record.reason, 180)}` : ''}`,
+          status: 'recorded_decision',
+          targetIds: [...record.targetIds],
+          chosenId: record.chosenId,
+          provenance,
+          _index: index,
+        };
+      }
+      const annotation = claimsById.get(record.id);
+      return {
+        id: record.id,
+        kind: 'claim',
+        at: record.createdAt,
+        summary: singleLine(`${record.subject} ${record.relationship} ${record.object}`, 360),
+        status: annotation?.lifecycleState ?? annotation?.status ?? record.status,
+        targetIds: [],
+        replaces: [...(record.supersededBy ?? [])],
+        replacedBy: [...(annotation?.supersededBy ?? [])],
+        conflictsWith: [...(annotation?.conflictsWith ?? [])],
+        provenance,
+        _index: index,
+      };
+    });
+    items.sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || b._index - a._index);
+    return {
+      items: items.slice(0, size).map(({ _index, ...item }) => item),
+      total: items.length,
+      truncated: items.length > size,
+      limit: size,
+    };
   }
 
   // Which claims one audited operation established. Every claim carries `provenance.operationId`,

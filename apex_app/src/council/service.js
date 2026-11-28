@@ -15,6 +15,9 @@ import {
   buildEvidenceSet, canonicalJson, classifyDisagreement, councilSessionId, digestOf, evaluatePerspective,
   MAX_EVIDENCE_ITEMS, parseObjective, PERSPECTIVES, synthesize,
 } from './index.js';
+// T-37 Step 2: the Values & Constraints Core, evaluated as the Council's eighth position.
+import { constraintPerspective } from './values-core.js';
+import { resolveCandidateCapabilities } from './candidate-resolver.js';
 
 const MAX_TASK_STEPS = 200;
 
@@ -47,9 +50,17 @@ export function mapRelation(relation) {
 }
 
 export class CouncilService {
-  constructor({ store = null, capabilityLookup, evidenceProvider = null, evidenceProviderName = null, context = null, now = () => new Date(), idFactory } = {}) {
+  constructor({ store = null, capabilityLookup, latchLookup = null, evidenceProvider = null, evidenceProviderName = null, context = null, registry = null, now = () => new Date(), idFactory } = {}) {
     this.store = store ?? null;
     this.capabilityLookup = capabilityLookup ?? (() => null);
+    // T-38 Step 1: the registry, read-only, so a deliberation that names no candidate can resolve one
+    // from the sentence. A service built without it simply keeps the pre-T-38 behaviour: no candidate,
+    // and every rule that needs one reports `unverifiable`.
+    this.registry = registry;
+    // T-37 Step 2: the safety latch, read-only, for the constraint core's lockdown rule. A lookup
+    // that throws or returns nothing leaves the rule `unverifiable`, which is the honest answer -
+    // an unreadable latch is not a released one.
+    this.latchLookup = latchLookup;
     this.evidenceProvider = evidenceProvider;
     this.evidenceProviderName = evidenceProviderName ?? (evidenceProvider ? 'reasoning' : null);
     this.context = context ?? null;
@@ -117,7 +128,17 @@ export class CouncilService {
       });
     }
 
-    const resolvedCandidate = candidate ?? (await this.candidateContext(candidateId));
+    // T-38 Step 1 (2026-11-21): a deliberation that names no candidate still has one if the sentence
+    // names a capability. The resolution is deterministic and comes from the controller's own router
+    // first, then from exact matching against registered names; when neither finds anything the
+    // candidate stays null and the constraints core reports `unverifiable` with `no_mapped_capability`
+    // as its stated reason. An explicit candidate or candidateId always wins over this reading.
+    let resolution = null;
+    let resolvedCandidate = candidate ?? (await this.candidateContext(candidateId));
+    if (!resolvedCandidate && this.registry) {
+      resolution = resolveCandidateCapabilities(objective, { registry: this.registry });
+      if (resolution.candidate) resolvedCandidate = resolution.candidate;
+    }
     const capability = resolvedCandidate ? this.capabilityLookup(resolvedCandidate.action || resolvedCandidate.id) : null;
 
     const evaluatedAt = this.#evaluationTime();
@@ -131,6 +152,30 @@ export class CouncilService {
       resourceContext: resourceContext ?? null,
       taskRecord: boundTaskRecord(taskRecord),
       evaluatedAt: evaluatedAt.toISOString(),
+    }));
+    // T-37 Step 2: the eighth position is the Values & Constraints Core. It is appended rather than
+    // folded into the seven engineering perspectives, because it answers a different question: not
+    // "how strong is this candidate" but "does it contradict a rule the owner set". Its own evaluation
+    // travels with it, so the owner can read which rule produced which verdict.
+    positions.push(constraintPerspective({
+      // The registry's own declaration, which is what the rules are written against: permission,
+      // origins, plannability and reversibility. `capability` is the Council's narrower view and does
+      // not carry the origins a rule needs.
+      definition: resolvedCandidate
+        ? this.capabilityLookup(resolvedCandidate.action || resolvedCandidate.id) ?? null
+        : null,
+      evidence: evidenceSet.items,
+      claims: resolvedCandidate ?? null,
+      latch: typeof this.latchLookup === 'function' ? this.latchLookup() : null,
+      inPlan: false,
+      // The resolution travels with the evaluation: when it found nothing, the core's detail says so
+      // with this reason rather than a generic "no declaration was supplied".
+      resolution: resolution
+        ? { kind: resolution.kind, reason: resolution.reason, detail: resolution.detail ?? null }
+        : null,
+      // The session's own evaluation instant, so a replay of the session reproduces this position
+      // byte for byte. A wall-clock read here would make every replay disagree with its record.
+      at: evaluatedAt.toISOString(),
     }));
     const disagreement = classifyDisagreement(positions);
     const synthesis = synthesize({
@@ -259,6 +304,20 @@ export class CouncilService {
       taskRecord: input.taskRecord ?? null,
       evaluatedAt: evaluatedAt.toISOString(),
     }));
+    // T-37 Step 2: the replay must rebuild the same eight positions the deliberation produced. The
+    // constraint core is evaluated here too, at the recorded instant, from the recorded declaration -
+    // otherwise a stored eight-position session could never match a replayed seven, and every replay
+    // would report a mismatch it did not have.
+    positions.push(constraintPerspective({
+      definition: input.candidate
+        ? this.capabilityLookup(input.candidate.action || input.candidate.id) ?? null
+        : null,
+      evidence: evidenceSet.items,
+      claims: input.candidate ?? null,
+      latch: typeof this.latchLookup === 'function' ? this.latchLookup() : null,
+      inPlan: false,
+      at: evaluatedAt.toISOString(),
+    }));
     const disagreement = classifyDisagreement(positions);
     const synthesis = synthesize({
       objective: { text: input.objective, valid: true },
@@ -365,10 +424,19 @@ function canonicalInput({ objective, evidence, candidateId, candidate, resourceC
   return {
     objective,
     candidateId: candidateId ? String(candidateId).slice(0, 128) : null,
+    // T-38 Step 2 (2026-11-21): a resolved candidate carries the safety metadata the constraints core
+    // reads, so the record says what the deliberation knew rather than only what it was called. A
+    // candidate supplied by a caller without metadata records `null`, which is the honest answer: the
+    // core then reports the rule it could not check instead of assuming a value.
     candidate: candidate ? {
       id: candidate.id ?? null,
       action: candidate.action ?? null,
       description: candidate.description ?? null,
+      capability: candidate.capability ?? null,
+      permission: candidate.permission ?? null,
+      reversibility: candidate.reversibility ?? null,
+      blastRadius: candidate.blastRadius ?? null,
+      metadataSource: candidate.metadataSource ?? null,
     } : null,
     evidence: evidence.map((item) => ({
       evidenceId: item.evidenceId,

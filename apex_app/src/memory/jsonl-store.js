@@ -47,6 +47,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { StoreError } from '../errors.js';
+import { isWriterLockHeld, WriterLock } from './writer-lock.js';
 
 function snapshotCorrupt(corrupt) {
   return corrupt.map((entry) => ({ ...entry }));
@@ -121,20 +122,44 @@ function parseLines(text, validateRecord) {
   return { records, corrupt };
 }
 
+// T-30 Step 1 (2026-11-19): retained reads. This instance keeps the records it last derived
+// together with the SHA-256 of the exact bytes they were derived from, and serves those records
+// again only when a fresh read of the file hashes to the same value. The bytes are therefore
+// always read; what retention saves is the parse, the validation and the freeze. A file's
+// identity is deliberately not used as a proof of content: `fs.stat({ bigint: true })` reports
+// dev/ino/size/mtimeNs/ctimeNs, and on the ext2/ext3 driver in this environment a same-length
+// rewrite in place leaves every one of them unchanged (measured: identical ino, mtimeNs and
+// ctimeNs after rewriting 28 bytes with 28 bytes). The first version of this aid was keyed on
+// that identity and served stale records, which `tests/request-scoped-reads.test.js` caught.
+
 export class JsonlStore {
   #snapshot = null;
   #appendState = null;
+  #appendLock;
   #justWrote = false;
   #cacheHits = 0;
   #cacheMisses = 0;
   #appendReuses = 0;
   #appendRebuilds = 0;
+  #readMeta = null;
+  #readPromise = null;
+  #readCacheHits = 0;
+  #readCacheMisses = 0;
+  #readComplete = false;
 
-  constructor(filePath, { validateRecord = () => null, parseCacheBytes = 0 } = {}) {
+  constructor(filePath, { validateRecord = () => null, parseCacheBytes = 0, readCache = true, readCacheMaxRecords = 20000 } = {}) {
     this.filePath = filePath;
     this.label = path.basename(filePath);
     this.validateRecord = validateRecord;
     this.parseCacheBytes = Number.isInteger(parseCacheBytes) && parseCacheBytes > 0 ? parseCacheBytes : 0;
+    // Retained reads are a separate aid from the byte snapshot: the snapshot skips the parse for
+    // bytes this instance already hashed, while retention also covers stores that keep no snapshot
+    // (`parseCacheBytes: 0`, which is how the task and plan ledgers are configured). `readCache` is
+    // the kill switch; the first version of this aid called the same switch `statCache`, which was
+    // a stat-keyed cache and is gone.
+    this.readCache = readCache !== false;
+    this.readCacheMaxRecords = Number.isInteger(readCacheMaxRecords) && readCacheMaxRecords > 0 ? readCacheMaxRecords : 20000;
+    this.#appendLock = new WriterLock(filePath, { label: `${this.label} append` });
   }
 
   // Read-only introspection of the derived snapshot. It reports a performance aid, not
@@ -178,7 +203,7 @@ export class JsonlStore {
 
   // The file's bytes, or null for the store that does not exist yet. A path that exists but
   // cannot be read is a StoreError, never an empty store.
-  async #readBytes() {
+  async #readBytesRaw() {
     try {
       return await fs.readFile(this.filePath);
     } catch (err) {
@@ -199,6 +224,40 @@ export class JsonlStore {
     }
   }
 
+  async #appendInProgress() {
+    try {
+      await fs.stat(this.#appendLock.lockPath);
+      return true;
+    } catch (err) {
+      return err?.code !== 'ENOENT';
+    }
+  }
+
+  // A reader can race the final write of an append and see an unterminated tail. If the writer's
+  // lock is present, wait briefly for its authoritative append to finish and re-read the bytes; if
+  // there is no lock and the same tail remains, preserve and report it as corruption as usual.
+  // This is read-only: the reader never creates or removes a lock, and a read inside the current
+  // store's WriterLock does not wait on itself.
+  async #readBytes() {
+    let buffer = await this.#readBytesRaw();
+    const complete = (value) => value === null || value.length === 0 || value[value.length - 1] === 0x0a;
+    if (complete(buffer) || isWriterLockHeld(this.filePath)) return buffer;
+    const deadline = Date.now() + 250;
+    while (true) {
+      if (!(await this.#appendInProgress())) {
+        const reread = await this.#readBytesRaw();
+        if (complete(reread)) return reread;
+        buffer = reread;
+        if (!(await this.#appendInProgress())) return buffer;
+      }
+      if (Date.now() >= deadline) return buffer;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const reread = await this.#readBytesRaw();
+      if (complete(reread)) return reread;
+      buffer = reread;
+    }
+  }
+
   // The file's records and its damage, from one read of the file. The snapshot only ever
   // skips the parse step; the bytes are always read from disk and, unless this instance has
   // just written them, hashed and compared before any record is handed out.
@@ -211,25 +270,137 @@ export class JsonlStore {
   // exact bytes these records were parsed from, or null when this read did not establish one.
   // It is the same digest the snapshot compares, so a caller may reuse work derived from these
   // records only while that key still describes the file. It never changes what is returned.
-  async load({ maintainSnapshot = true, certification = null } = {}) {
+  // Read-only introspection of the retained read. It reports a performance aid, never stored
+  // state: `hits` counts reads answered by the retained records after the bytes were read and
+  // hashed, `misses` counts reads that had to parse. It must not be used to decide whether a
+  // record exists.
+  get readCacheStats() {
+    return {
+      enabled: this.readCache,
+      cached: this.#readMeta !== null,
+      cachedRecords: this.#readMeta?.records.length ?? 0,
+      cachedBytes: this.#readMeta?.bytes ?? null,
+      hits: this.#readCacheHits,
+      misses: this.#readCacheMisses,
+    };
+  }
+
+  // A read is served from the retained derivation only when the bytes on disk are proved to be the
+  // bytes those records were validated from. That proof is a SHA-256 of the file, read on every
+  // candidate read; it is not the file's identity.
+  //
+  // Why not the identity: `fs.stat({ bigint: true })` names a file by dev/ino/size/mtimeNs/ctimeNs,
+  // and on the ext2/ext3 driver this environment uses, a same-length rewrite in place leaves *all
+  // five* unchanged (measured: identical mtimeNs, ctimeNs and ino after rewriting 28 bytes with 28
+  // bytes). The first version of this aid did key on that identity and served the old record —
+  // `request-scoped-reads` caught it — so the identity is not used as proof of content here.
+  //
+  // What the retention therefore saves is the parse, the validation and the freeze, never the read.
+  // Concurrent reads of one file share a single read (an in-flight promise), so the page-load burst
+  // costs one read and one hash per store rather than one per route. A digest mismatch, a length
+  // change, an unterminated tail, a missing file or an unreadable path all fall through to the
+  // ordinary parse path, which re-validates by exactly the same rules.
+  async load(options = {}) {
+    const { maintainSnapshot = true, certification = null } = options;
+    if (this.readCache && !this.#justWrote && this.#readMeta && this.#readMeta.complete && this.#readMeta.digest !== null) {
+      const bytes = await this.#currentBytes();
+      if (bytes !== null && bytes.length === this.#readMeta.bytes && digest(bytes) === this.#readMeta.digest) {
+        this.#readCacheHits += 1;
+        // A read answered from the retained derivation is also a parse-snapshot hit, so the two aids
+        // report one consistent story: every read is either served from a retained derivation or
+        // parsed. The snapshot only exists for a store that keeps one, so a store with
+        // `parseCacheBytes` at 0 is never credited with a hit it did not have.
+        if (this.#snapshot !== null) this.#cacheHits += 1;
+        // The retained records were derived from exactly these bytes, so a caller that keys its own
+        // derived index by that digest (the knowledge lifecycle index) keeps its derivation.
+        if (certification && typeof certification === 'object') certification.key = this.#readMeta.digest;
+        // Damage is reported per read as its own entries, exactly as the byte snapshot reports it, so
+        // one consumer cannot edit another read's account of what was wrong with the file.
+        return { records: [...this.#readMeta.records], corrupt: snapshotCorrupt(this.#readMeta.corrupt) };
+      }
+      this.#readCacheMisses += 1;
+      // A missing file has no bytes to hash; `null` here means "no digest was established", which is
+      // what a read of nothing has to certify.
+      return this.#reload({
+        maintainSnapshot,
+        certification,
+        buffer: bytes,
+        digestOfBuffer: bytes === null ? null : digest(bytes),
+      });
+    }
+    this.#readCacheMisses += 1;
+    return this.#reload({ maintainSnapshot, certification });
+  }
+
+  // One physical read per file per turn of the event loop: concurrent callers await the same
+  // promise. Each still compares the digest itself, so a shared read cannot make two reads agree
+  // about bytes that were never there.
+  #currentBytes() {
+    if (this.#readPromise === null) {
+      this.#readPromise = this.#readBytes().finally(() => { this.#readPromise = null; });
+    }
+    return this.#readPromise;
+  }
+
+  async #reload({ maintainSnapshot, certification, buffer = null, digestOfBuffer = null }) {
+    const certify = certification && typeof certification === 'object' ? certification : null;
+    const read = await this.#loadFromDisk({ maintainSnapshot, certification, buffer, digestOfBuffer });
+    const { records, corrupt } = read;
+    // `parseCacheBytes` bounds everything this instance retains, and this retained derivation is
+    // the same state under a different name: a store of more than that many bytes retains nothing,
+    // so a large store keeps its cold cost rather than trading it for unbounded memory. A store
+    // that never configured the cap retains under the record bound alone.
+    const withinCap = this.parseCacheBytes === 0 || read.bytes === null || read.bytes <= this.parseCacheBytes;
+    const retain = withinCap && records.length <= this.readCacheMaxRecords && this.#lastReadComplete() && read.digest;
+    if (retain) {
+      this.#readMeta = {
+        bytes: read.bytes ?? null,
+        records: [...records],
+        corrupt: snapshotCorrupt(corrupt),
+        complete: true,
+        digest: read.digest,
+      };
+      // A read certifies its content to the caller only when this store kept the derivation it
+      // made from it. Otherwise the caller's own reuse would outlive the only proof APEX holds.
+      if (certify && certify.key == null) certify.key = read.digest;
+    } else {
+      this.#readMeta = null;
+    }
+    return { records, corrupt };
+  }
+
+  // A read is cacheable only when the file it described ended on a line boundary: an
+  // unterminated tail means a writer is mid-append, and pinning that state would defeat the
+  // wait-and-reread behaviour in `#readBytes`.
+  #lastReadComplete() {
+    return this.#readComplete;
+  }
+
+  async #loadFromDisk({ maintainSnapshot = true, certification = null, buffer: supplied = null, digestOfBuffer = null } = {}) {
     const certify = certification && typeof certification === 'object' ? certification : null;
     if (certify) certify.key = null;
     const note = (key) => { if (certify) certify.key = key; };
-    const buffer = await this.#readBytes();
+    const buffer = supplied === null ? await this.#readBytes() : supplied;
+    this.#readComplete = buffer === null || buffer.length === 0 || buffer[buffer.length - 1] === 0x0a;
     if (buffer === null) {
       note(EMPTY_DIGEST);
-      return { records: [], corrupt: [] };
+      return { records: [], corrupt: [], digest: EMPTY_DIGEST, bytes: null };
     }
     const text = () => buffer.toString('utf8');
 
     if (!maintainSnapshot) {
       this.#cacheMisses += 1;
-      return parseLines(text(), this.validateRecord);
+      return { ...parseLines(text(), this.validateRecord), digest: null, bytes: buffer.length };
     }
     const cacheable = this.parseCacheBytes > 0 && buffer.length <= this.parseCacheBytes;
+    const bufferDigest = () => digestOfBuffer ?? digest(buffer);
     const justWrote = this.#justWrote;
     this.#justWrote = false;
-    if (!cacheable) return parseLines(text(), this.validateRecord);
+    // A store without a byte snapshot still keeps its retained read: the digest is what proves the
+    // bytes, and hashing a file that was just read costs a fraction of parsing and validating it.
+    if (!cacheable) {
+      return { ...parseLines(text(), this.validateRecord), digest: bufferDigest(), bytes: buffer.length };
+    }
     if (justWrote) {
       // This instance changed the bytes, so a snapshot match cannot exist. Its own append may
       // still have left the write path with the validated records of exactly these bytes: if
@@ -238,32 +409,32 @@ export class JsonlStore {
       // (a foreign writer, a partial write, a dropped state) falls back to a full parse.
       const state = this.#appendState;
       if (state && state.bytes === buffer.length) {
-        const key = digest(buffer);
+        const key = bufferDigest();
         if (key === state.key) {
           this.#snapshot = { key, bytes: buffer.length, records: [...state.records], corrupt: [] };
           this.#cacheHits += 1;
           note(key);
-          return { records: [...state.records], corrupt: [] };
+          return { records: [...state.records], corrupt: [], digest: key, bytes: buffer.length };
         }
       }
       this.#cacheMisses += 1;
-      return parseLines(text(), this.validateRecord);
+      return { ...parseLines(text(), this.validateRecord), digest: null, bytes: buffer.length };
     }
-    const key = digest(buffer);
+    const key = bufferDigest();
     if (this.#snapshot && this.#snapshot.key === key) {
       this.#cacheHits += 1;
       note(key);
       // The records are frozen and shared; only the list around them is per-read, so a caller
       // sorting or pushing onto the list it was handed cannot reach the snapshot. A record field
       // cannot be edited at all, which is the same guarantee `loadForAppend()` already gives.
-      return { records: [...this.#snapshot.records], corrupt: snapshotCorrupt(this.#snapshot.corrupt) };
+      return { records: [...this.#snapshot.records], corrupt: snapshotCorrupt(this.#snapshot.corrupt), digest: key, bytes: buffer.length };
     }
     this.#cacheMisses += 1;
     const parsed = parseLines(text(), this.validateRecord);
     const records = retainRecords(parsed.records);
     this.#snapshot = { key, bytes: buffer.length, records, corrupt: snapshotCorrupt(parsed.corrupt) };
     note(key);
-    return { records: [...records], corrupt: parsed.corrupt };
+    return { records: [...records], corrupt: parsed.corrupt, digest: key, bytes: buffer.length };
   }
 
   // The read a write performs. It returns the same shape as `load()`: the file's records and its
@@ -339,6 +510,11 @@ export class JsonlStore {
   }
 
   async append(record) {
+    if (isWriterLockHeld(this.filePath)) return this.#appendUnlocked(record);
+    return this.#appendLock.run(() => this.#appendUnlocked(record));
+  }
+
+  async #appendUnlocked(record) {
     const line = `${JSON.stringify(record)}\n`;
     let handle;
     let written = 0;

@@ -306,6 +306,7 @@ describe('065: an append reports success only when the whole record is written',
     let firstWrite = true;
     fsp.open = async (...args) => {
       const handle = await realOpen(...args);
+      if (path.resolve(String(args[0])) !== path.resolve(file)) return handle;
       const realWrite = handle.write.bind(handle);
       handle.write = async (data, offset = 0, length = data.length - offset) => {
         if (firstWrite) {
@@ -334,6 +335,7 @@ describe('065: an append reports success only when the whole record is written',
     const realOpen = fsp.open;
     fsp.open = async (...args) => {
       const handle = await realOpen(...args);
+      if (path.resolve(String(args[0])) !== path.resolve(file)) return handle;
       handle.write = async () => ({ bytesWritten: 0, buffer: Buffer.alloc(0) });
       return handle;
     };

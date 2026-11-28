@@ -25,3 +25,9 @@
 
 ## Remote sync
 - Push attempted; see final verification.
+
+## T-30 dated reconciliation note (2026-11-19)
+
+This T-24 report remains the contemporaneous summary for T-20 through T-24; its earlier test totals and its T-22 “council foundation not implemented” statement are not current status. Subsequent T-25 work added a Council foundation; T-26/T-27 added the deterministic Workshop foundation; later code includes ECP, autonomy configuration, a durable local kill-switch latch and Resource Fabric foundations. None of those additions is retroactively claimed as T-20–T-24 evidence.
+
+This Arena checkout's shallow history starts at `fb09e73f2d875fe8697d731c9b9845dd054a0465`; the report's referenced `5098705` object is not available to replay. Its historical assertions are preserved, not independently re-certified. For the current T-30 status and exact local tests, see `apex_app/reports/T30_PROGRESS.md`.

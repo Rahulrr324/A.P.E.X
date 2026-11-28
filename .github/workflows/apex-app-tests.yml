@@ -1,16 +1,12 @@
-name: APEX Local Alpha Tests
+name: APEX Local Alpha Checks
 
+# T-30 (2026-11-19): supersedes the earlier path-filtered trigger. Every push to main now
+# runs the source/client syntax guard and full APEX test suite, including repository-wide edits.
 on:
   push:
     branches: [main]
-    paths:
-      - "apex_app/**"
-      - ".github/workflows/apex-app-tests.yml"
   pull_request:
     branches: [main]
-    paths:
-      - "apex_app/**"
-      - ".github/workflows/apex-app-tests.yml"
   workflow_dispatch:
 
 permissions:
@@ -24,7 +20,7 @@ jobs:
   test:
     name: Node.js test suite
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 35
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -34,6 +30,972 @@ jobs:
           node-version: 22
       - name: Verify Node.js version
         run: node --version
-      - name: Run APEX tests
+      - name: Install development dependencies only
         working-directory: apex_app
-        run: npm test
+        run: npm ci --ignore-scripts
+      - name: Check source files and extracted UI client
+        working-directory: apex_app
+        run: npm run test:syntax
+      - name: Run the full APEX test suite
+        working-directory: apex_app
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee "$RUNNER_TEMP/apex-test.log"
+      # T-31 Step 1 (2026-11-19): the real-browser verification. This job is the reason the step
+      # exists - the runner ships /usr/bin/microsoft-edge, so the suite launches a real Chromium
+      # build rather than skipping. The resolver in src/ui/browser-binary.js picks the binary and
+      # the summary below records exactly which one ran.
+      - name: Real-browser verification (system Edge/Chromium, headless)
+        # It runs even when the Node suite failed: the browser evidence is worth having on a red
+        # run too, and a skip here must mean "no browser", not "an earlier step failed".
+        if: ${{ !cancelled() }}
+        id: browser
+        working-directory: apex_app
+        run: |
+          set -o pipefail
+          # The list reporter is for a human reading the log. The JSON reporter is for the
+          # annotation: it records every test's own status, so a red step can say which test was red
+          # instead of leaving it to be inferred from a truncated list. Its file is written to the
+          # runner's temp directory beside the log and never into the repository.
+          PLAYWRIGHT_JSON_OUTPUT_NAME="$RUNNER_TEMP/t31-browser.json" \
+            node node_modules/playwright/cli.js test --reporter=list,json \
+            2>&1 | tee "$RUNNER_TEMP/t31-browser.log"
+          exit "${PIPESTATUS[0]}"
+      # The browser result, the viewports and each screenshot's real dimensions, as one annotation
+      # this environment can read without downloading the job log.
+      - name: Publish the real-browser result
+        if: always()
+        shell: bash
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, re, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          log = os.path.join(os.environ.get('RUNNER_TEMP', '/tmp'), 't31-browser.log')
+          text = open(log, encoding='utf-8', errors='replace').read() if os.path.exists(log) else ''
+          match = re.search(r'^T31_BROWSER_SUMMARY (\{.*\})$', text, re.M)
+          parts = [f'step={outcome}']
+          level = 'notice'
+          if not match:
+              skipped = re.search(r'(\d+) skipped', text)
+              parts.append('no browser summary was printed')
+              if skipped:
+                  parts.append(f'{skipped.group(1)} test(s) skipped (no Chromium-family binary on the runner)')
+          else:
+              data = json.loads(match.group(1))
+              parts.append(f"browser={data['browserVersion']}")
+              parts.append(f"executable={data['resolved']['executable']} ({data['resolved']['source']})")
+              for viewport in data['viewports']:
+                  console_errors = viewport.get('errors', {}).get('console', [])
+                  page_errors = viewport.get('errors', {}).get('page', [])
+                  errors = len(console_errors) + len(page_errors)
+                  line = (
+                      f"{viewport['viewport']['width']}x{viewport['viewport']['height']}: core={viewport.get('core')} "
+                      f"overflow={viewport['overflow']['scrollWidth']}<={viewport['overflow']['clientWidth']} errors={errors}"
+                  )
+                  # The first error is quoted: a count alone cannot be acted on, and the browser log
+                  # is the only place the client's own message appears.
+                  if errors:
+                      first = (console_errors + page_errors)[0]
+                      line += ' firstError=' + str(first)
+                  parts.append(line)
+              for shot in data['screenshots']:
+                  parts.append(f"{shot['file']} {shot['width']}x{shot['height']} {shot['bytes']}B")
+              parts.append('checks=' + json.dumps(data.get('checks', {}), sort_keys=True))
+          # The JSON reporter's own record of every test, so a red step names the red test rather
+          # than leaving it to be inferred from a list the annotation has room to truncate. Each line
+          # is "<file> :: <title> -> <status> (<duration>)", read from the runner's temp directory.
+          report = os.path.join(os.environ.get('RUNNER_TEMP', '/tmp'), 't31-browser.json')
+          if os.path.exists(report):
+              try:
+                  results = json.load(open(report, encoding='utf-8'))
+                  for suite_file in results.get('suites', []):
+                      for spec in suite_file.get('specs', []):
+                          for test_case in spec.get('tests', []):
+                              status = (test_case.get('results') or [{}])[-1].get('status', 'unknown')
+                              duration = sum(int((r.get('duration') or 0) / 1000) for r in (test_case.get('results') or []))
+                              parts.append(f"{os.path.basename(spec.get('file') or suite_file.get('file') or '?')} :: {spec.get('title')[:70]} -> {status} ({duration}s)")
+                              if status not in ('passed', 'skipped'):
+                                  level = 'error'
+              except Exception as error:  # a broken report must not hide the summary that did print
+                  parts.append(f'could not read the json report: {error}')
+          else:
+              parts.append('no json report was written')
+          message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          # `level` was set above from the step outcome and again from any test that did not pass, so
+          # the annotation is red for either reason rather than the last assignment winning.
+          level = 'error' if level == 'error' or outcome != 'success' else 'notice'
+          print(f'::{level} title=real-browser-verification::{message[:60000]}')
+          PY
+      # T-32 Step 2 (2026-11-19): the HUD experience result. Reticle posture per Core state, the
+      # plane ordering, the contrast audit totals, the focus traversal and the acknowledgement
+      # latency, plus every PNG the artifact holds, as one annotation.
+      - name: Publish the HUD experience result
+        if: always()
+        shell: bash
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, re, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          log = os.path.join(os.environ.get('RUNNER_TEMP', '/tmp'), 't31-browser.log')
+          text = open(log, encoding='utf-8', errors='replace').read() if os.path.exists(log) else ''
+          match = re.search(r'^T32_HUD_SUMMARY (\{.*\})$', text, re.M)
+          parts = [f'hud-step={outcome}']
+          if not match:
+              parts.append('no HUD summary was printed (the browser suite did not reach the T-32 file)')
+          else:
+              data = json.loads(match.group(1))
+              parts.append(f"browser={data.get('browserVersion')}")
+              reticle = data.get('reticle') or {}
+              for state in ('idle', 'awaiting_approval', 'degraded', 'lockdown'):
+                  posture = reticle.get(state) or {}
+                  parts.append(
+                      f"reticle[{state}]: stroke={posture.get('stroke')} weight={posture.get('weight')} "
+                      f"dash={posture.get('dash')} animation={posture.get('animationName')}"
+                  )
+              planes = data.get('planes') or {}
+              for viewport, table in planes.items():
+                  parts.append(f"planes[{viewport}]: " + ', '.join(
+                      f"{plane}={sorted(set(entry.get('zIndexes') or []))}" for plane, entry in sorted(table.items())
+                  ))
+              audits = data.get('contrast') or []
+              violations = sum(entry.get('violations') or 0 for entry in audits)
+              checks = sum(entry.get('checked') or 0 for entry in audits)
+              parts.append(f'contrast: {checks} text runs checked, {violations} violations')
+              if violations:
+                  first = next((entry for entry in audits if entry.get('violations')), None)
+                  parts.append('firstContrastFailure=' + json.dumps(first, sort_keys=True))
+              keyboard = data.get('keyboard') or {}
+              if keyboard:
+                  parts.append('ackMs=' + str(keyboard.get('inPageAckMs')) + ' inputBeforeTabs=' + str(keyboard.get('inputBeforeTabs')))
+                  parts.append('tabStops=' + ' > '.join(keyboard.get('stops') or []))
+                  parts.append('escapeTo=' + str(keyboard.get('escapeTo')))
+              motion = data.get('motion') or {}
+              if motion:
+                  parts.append('motion=' + json.dumps(motion, sort_keys=True))
+              failures = data.get('failures') or []
+              for failure in failures:
+                  parts.append(f"FAILED {failure.get('title')} :: {failure.get('message')}")
+              shots = data.get('screenshots') or []
+              parts.append(f'artifact: {len(shots)} PNG(s) under apex_app/reports/screenshots/t32')
+              for shot in shots:
+                  parts.append(f"{shot['state']} {shot['viewport']} {shot['bytes']}B")
+          # The short failure line first, in its own annotation, so it survives any truncation of
+          # the long summary below.
+          level = 'notice' if outcome == 'success' else 'error'
+          short = re.search(r'^T32_FAILURES (\{.*\})$', text, re.M)
+          if short:
+              detail = short.group(1).replace('%', '%25').replace('\r', '')
+              print(f'::{level} title=hud-failures::{detail[:4000]}')
+          message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=hud-experience::{message[:60000]}')
+          PY
+
+      # The Playwright failure text, not only my summary of it: a failed browser run has to be
+      # actionable from the checks API alone, because the job log sits behind a download.
+      - name: Publish the browser failure detail
+        if: always()
+        shell: bash
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import os, re, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          log = os.path.join(os.environ.get('RUNNER_TEMP', '/tmp'), 't31-browser.log')
+          text = open(log, encoding='utf-8', errors='replace').read() if os.path.exists(log) else ''
+          wanted = re.compile(r'(\u2718|\u00d7|Error:|error:|Expected|Received|Timeout|waiting for|locator|spec\.mjs:\d+)')
+          lines = [line.strip() for line in text.splitlines() if wanted.search(line)]
+          detail = ' ~ '.join(lines[:60]) if lines else 'no failure lines were logged'
+          message = detail.replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          level = 'notice' if outcome == 'success' else 'error'
+          print(f'::{level} title=browser-failures::{message[:30000]}')
+          PY
+
+      # T-33 Step 4 (2026-11-19): the executive-loop walk publishes its own one-line annotation. The
+      # summary is written by the spec itself from what the page and the API answered, so the
+      # annotation states which of the seven checkpoints ran, or that no browser ran at all.
+      - name: Publish the T-33 executive-loop result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't33-executive-loop.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t33-executive-loop::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          def _t33_budget(run):
+              for step in run.get('steps', []):
+                  if step.get('id') == 'revoke':
+                      detail = step.get('detail') or {}
+                      used = detail.get('budgetUsed')
+                      limit = detail.get('budgetLimit')
+                      quiet = detail.get('quietHours')
+                      if used is None or limit is None:
+                          return 'not reported'
+                      return f"{used}/{limit} used | quietHours={quiet}"
+              return 'revoke leg did not run'
+          run = json.load(open(path, encoding='utf-8'))
+          steps = [step.get('id') for step in run.get('steps', [])]
+          shots = len(run.get('screenshots', []))
+          failures = run.get('failures', [])
+          facts = run.get('facts') or {}
+          core = (facts.get('state') or {}).get('body', {}).get('coreReading')
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"checkpoints {len(steps)}: {','.join(str(name) for name in steps) or 'none'}",
+              f"screenshots {shots}",
+              f"core at end {core or 'not read'}",
+              # T-42 Step 2: the push budget the revoke leg measured. A delivered row on an exhausted
+              # budget would mean the cap had been bypassed, so the annotation states the number.
+              f"budget {_t33_budget(run)}",
+          ]
+          level = 'error' if failures else 'notice'
+          if failures:
+              parts.append('failures: ' + ' ~ '.join(str(failure) for failure in failures[:10]))
+          message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t33-executive-loop::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
+      # T-34 Step 4 (2026-11-19): the mission-DAG walk publishes its own one-line annotation, written by
+      # the spec from what the page and the API answered: the shape it saw, the checkpoints it reached
+      # and whether the join was held before it ran.
+      - name: Publish the T-34 mission-DAG result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't34-mission-dag.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t34-mission-dag::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          steps = [step.get('id') for step in run.get('steps', [])]
+          shots = len(run.get('screenshots', []))
+          failures = run.get('failures', [])
+          facts = run.get('facts') or {}
+          graph = ((facts.get('missionGraph') or {}).get('body') or {})
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"checkpoints {len(steps)}: {','.join(str(name) for name in steps) or 'none'}",
+              f"screenshots {shots}",
+              f"mission {graph.get('status') or 'not read'} verified {graph.get('verified')}",
+          ]
+          level = 'error' if failures else 'notice'
+          if failures:
+              parts.append('failures: ' + ' ~ '.join(str(failure) for failure in failures[:10]))
+          message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t34-mission-dag::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
+      # T-35 Step 4 (2026-11-19): the step-down / handoff / doctor walk publishes its own annotation,
+      # written by the spec from what the browser and the API answered: which rungs of the ladder were
+      # walked, whether the flash guard held, and whether the handoff and the doctor were real.
+      - name: Publish the T-35 step-down, handoff and doctor result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't35-stepdown-handoff-doctor.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t35-stepdown-handoff-doctor::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          steps = [step.get('id') for step in run.get('steps', [])]
+          shots = len(run.get('screenshots', []))
+          failures = run.get('failures', [])
+          stages = run.get('stages') or {}
+          guard = run.get('flashGuard') or {}
+          handoff = run.get('handoff') or {}
+          doctor = run.get('doctor') or {}
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"checkpoints {len(steps)}: {','.join(str(name) for name in steps) or 'none'}",
+              f"screenshots {shots}",
+              f"stages walked {','.join(str(key) for key in stages if str(key) != 'auto') or 'none'} (auto {stages.get('auto', {}).get('auto') if isinstance(stages.get('auto'), dict) else 'not read'})",
+              f"flash guard {guard.get('animations', 'not measured')} animation(s), {guard.get('violations', 'n/a')} violation(s)",
+              f"handoff {handoff.get('id') or 'none'} digest {str(handoff.get('digest') or '')[:12]} matched {handoff.get('digestMatchedAfterClaim')}",
+              f"doctor {doctor.get('status') or 'not run'} in {doctor.get('durationMs')} ms of 500 (within budget {doctor.get('withinBudget')})",
+          ]
+          level = 'error' if failures else 'notice'
+          if failures:
+              parts.append('failures: ' + ' ~ '.join(str(failure) for failure in failures[:10]))
+          message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t35-stepdown-handoff-doctor::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
+      # T-36 Step 4 (2026-11-21): the cold boot on an unseeded workstation publishes its own
+      # annotation. Unlike every other browser suite, this one starts from an empty temporary data
+      # directory and a fresh temporary git repository, so what it reports - the host reading, the
+      # branch and head, the enrolled workstation - was produced by the bootstrap during the walk.
+      - name: Publish the T-36 cold-boot result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't36-cold-boot-unseeded.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t36-cold-boot-unseeded::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          unseeded = run.get('unseeded') or {}
+          cold = run.get('coldBoot') or {}
+          core = run.get('core') or {}
+          telemetry = run.get('telemetry') or {}
+          workspace = run.get('workspace') or {}
+          device = run.get('device') or {}
+          briefing = run.get('briefing') or {}
+          doctor = run.get('doctor') or {}
+          cognition = run.get('cognition') or {}
+          overflow = run.get('overflow') or {}
+          failures = run.get('failures', [])
+          rows = cold.get('rows') or []
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"unseeded entries {len(unseeded.get('entries') or [])} marker={unseeded.get('bootstrapMarker')} devices={unseeded.get('deviceRegistry')}",
+              f"boot rows {len(rows)}: {','.join(str(row.get('id')) + '=' + str(row.get('state')) for row in rows) or 'none'}",
+              f"dormant {cold.get('dormantSeen')} landing {core.get('landing')} trail {'>'.join(str(state) for state in core.get('trail') or [])}",
+              f"host {telemetry.get('host', {}).get('cpu')} cpu / {round((telemetry.get('host', {}).get('memoryTotalBytes') or 0) / 1073741824, 1)} GiB",
+              f"workspace {workspace.get('branch')}@{workspace.get('head')} (repo {workspace.get('expected', {}).get('branch')}@{workspace.get('expected', {}).get('head')})",
+              f"device {device.get('deviceId')} {device.get('status')} enrolled {device.get('enrolled')}",
+              f"briefing facts {','.join(str(kind) for kind in briefing.get('facts') or []) or 'none'}",
+              f"doctor {doctor.get('passing')}/{doctor.get('total')} pass in {doctor.get('durationMs')} ms (within budget {doctor.get('withinBudget')})",
+              f"cognition {cognition.get('runStatus')} task {cognition.get('taskId')} approvals {cognition.get('approvalCount')}",
+              f"overflow {overflow.get('scrollWidth')}<={overflow.get('clientWidth')}",
+              f"screenshots {len(run.get('screenshots') or [])}",
+          ]
+          level = 'error' if failures else 'notice'
+          if failures:
+              parts.append('failures: ' + ' ~ '.join(str(failure.get('message')) for failure in failures[:10]))
+          message = ' | '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t36-cold-boot-unseeded::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
+      # T-37 Step 4 (2026-11-21): the neural/Council/router walk publishes its own annotation. It is
+      # the only suite that reads all eight substrate regions and all eleven screen declarations out
+      # of a live DOM, so its annotation carries both counts plus each dispatch receipt.
+      - name: Publish the T-37 result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't37-neural-council-router.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t37-neural-council-router::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          regions = run.get('regions') or []
+          boundary = run.get('boundary') or {}
+          council = run.get('council') or {}
+          receipts = run.get('receipts') or []
+          screens = run.get('screens') or []
+          overflow = run.get('overflow') or {}
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"regions {len(regions)}: {','.join(str(region) for region in regions) or 'none'}",
+              f"bridge {str((run.get('bridge') or {}).get('version') or 'read')}",  
+              f"boundary {boundary.get('epistemicStatus')} authoritative={boundary.get('authorizesExecution')} writesObserved={boundary.get('mutatesObservedFacts')}",
+              f"council sessions {council.get('sessions')} compile {str(council.get('compileText'))[:60]}",
+              f"receipts {len(receipts)}: {';'.join(str(receipt.get('line')) + '=>' + str(receipt.get('route')) + '/' + str(receipt.get('verified')) for receipt in receipts) or 'none'}",
+              f"screens {len(screens)}: {','.join(str(screen.get('id')) for screen in screens) or 'none'}",
+              f"overflow {overflow.get('scrollWidth')}<={overflow.get('clientWidth')}",
+              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])} reloadAborts {len(run.get('abortedStreams') or [])}",
+              f"screenshots {run.get('screenshots')}",
+          ]
+          failures = list(run.get('failures') or [])
+          failures += [{'message': message} for message in (run.get('consoleErrors') or [])]
+          failures += [{'message': message} for message in (run.get('pageErrors') or [])]
+          level = 'error' if failures else 'notice'
+          if failures:
+              parts.append('failures: ' + ' ~ '.join(
+                  (str(failure.get('phase')) + ': ' if failure.get('phase') else '') + str(failure.get('message'))[:200]
+                  for failure in failures[:10]))
+          message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t37-neural-council-router::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
+      # T-38 Step 4 (2026-11-21): the values/workspace/trace walk. Its annotation carries the three
+      # claims the brief asked for by name - the constraint verdict and the candidate's declared
+      # metadata, whether the sandbox caught a real syntax error with a real exit code, and whether a
+      # chain reached every ledger - so a green run states what it proved rather than that it passed.
+      - name: Publish the T-38 result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't38-values-workspace-trace.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t38-values-workspace-trace::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          values = run.get('values') or {}
+          workspace = run.get('workspace') or {}
+          sandbox = run.get('sandbox') or {}
+          trace = run.get('trace') or {}
+          declaration = (values.get('definition') or values.get('declaration') or {})
+          sandbox_valid = sandbox.get('valid') or {}
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"council verdict {values.get('verdict')} counts {json.dumps(values.get('counts') or {})}",
+              f"candidate {declaration.get('capability')} reversibility={declaration.get('reversibility')} blastRadius={declaration.get('blastRadius')} source={declaration.get('metadataSource')}",
+              f"unmapped verdict {(values.get('unmapped') or {}).get('verdict')}",
+              f"workspace listed {','.join(str(p) for p in (workspace.get('listed') or [])) or 'none'} digestMatchesDisk={workspace.get('digestMatchesDisk')}",
+              f"sandbox refusedPromotion {sandbox.get('refusedPromotionStatus')}/{sandbox.get('refusedPromotionCode')} liveUnchanged={sandbox.get('liveFileUnchangedAfterRefusal')} verified={('verified' in str(sandbox_valid.get('rendered') or ''))} promotedWithoutWriting={sandbox.get('promotedWithoutWritingLiveTree')}",
+              f"trace results {trace.get('resultCount')} kinds {','.join(str(k) for k in (trace.get('kinds') or []))} chain {trace.get('chainLength')} complete={trace.get('complete')}",
+              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])} reloadAborts {len(run.get('abortedStreams') or [])}",
+              f"screenshots {run.get('screenshots')}",
+          ]
+          failures = list(run.get('failures') or [])
+          failures += [{'message': message} for message in (run.get('consoleErrors') or [])]
+          failures += [{'message': message} for message in (run.get('pageErrors') or [])]
+          level = 'error' if failures else 'notice'
+          if failures:
+              # `failures` mixes strings the walk pushed and dicts built from console messages, so
+              # each entry is read by its own shape. Assuming one shape crashed this step silently,
+              # which is worse than a bad message: no annotation at all, and a second red step that
+              # was only a symptom of the first.
+              def failure_text(failure):
+                  # A failure may now carry the phase it happened in and the source location, because
+                  # the message alone is what made a real assertion failure look like a clean run.
+                  if isinstance(failure, dict):
+                      phase = failure.get('phase')
+                      message = str(failure.get('message') or failure)
+                      return (f'[{phase}] {message}' if phase else message)
+                  return str(failure)
+              parts.append('failures: ' + ' ~ '.join(failure_text(failure)[:200] for failure in failures[:10]))
+          message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t38-values-workspace-trace::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
+      # T-39 Step 4 (2026-11-22): the governed apply and rollback walk. Its annotation states the four
+      # claims by name - that staging left the live file untouched, that the applied bytes matched the
+      # candidate's digest as read from disk, that a stale candidate was refused with both digests and
+      # the external edit survived, and that the rollback restored the file byte-for-byte and the chain
+      # holds both events in order.
+      - name: Publish the T-39 result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't39-workshop-apply-rollback.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t39-workshop-apply-rollback::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          applied = run.get('apply') or {}
+          drift = run.get('drift') or {}
+          rollback = run.get('rollback') or {}
+          trace = run.get('trace') or {}
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"candidate {applied.get('candidateId')} liveUnchangedBeforeApply={applied.get('liveUnchangedBeforeApply')}",
+              f"apply {applied.get('applyId')} diskMatches={applied.get('diskMatchesAppliedSha256')} backupHoldsPrior={applied.get('backupHoldsPriorBytes')} badge={applied.get('uiShowsAppliedBadge')} rollbackControl={applied.get('uiShowsRollbackControl')}",
+              f"drift {drift.get('code')} digestsShown={drift.get('uiShowsBothDigests')} externalEditIntact={drift.get('externalEditIntact')} ledgerApplies={drift.get('ledgerApplyCount')}",
+              f"rollback {rollback.get('applyId')} byteIdentical={rollback.get('byteIdentical')} restoredMatchesBefore={bool(rollback.get('restoredSha256'))} removedFile={rollback.get('removedFile')} uiConfirmed={rollback.get('uiConfirmed')}",
+              f"trace changes {trace.get('workspaceChanges')} ordered={trace.get('orderedApplyThenRollback')} digests={trace.get('digestsPresent')} complete={trace.get('complete')} counts {json.dumps(trace.get('counts') or {})}",
+              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])} scheduledRefusals {len(run.get('scheduledRefusals') or [])}",
+              f"screenshots {run.get('screenshots')}",
+          ]
+          failures = list(run.get('failures') or [])
+          failures += [{'message': message} for message in (run.get('consoleErrors') or [])]
+          failures += [{'message': message} for message in (run.get('pageErrors') or [])]
+          level = 'error' if failures else 'notice'
+          if failures:
+              def failure_text(failure):
+                  if isinstance(failure, dict):
+                      phase = failure.get('phase')
+                      message = str(failure.get('message') or failure)
+                      return (f'[{phase}] {message}' if phase else message)
+                  return str(failure)
+              parts.append('failures: ' + ' ~ '.join(failure_text(failure)[:200] for failure in failures[:10]))
+          message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t39-workshop-apply-rollback::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
+      # T-40 Step 4 (2026-11-22): the changeset, disk-drift and command-help walk. Its annotation
+      # states the six claims by name - that the pre-flight refused the batch and left BOTH files
+      # untouched, that the clean batch applied atomically with each file re-read from disk, that the
+      # disk re-check flipped one row to modified_externally with both digests, that the batch rollback
+      # was refused with the external edit intact, that the clean rollback returned both files
+      # byte-for-byte, and that the command reference opened by key and dismissed with Escape.
+      - name: Publish the T-40 result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't40-changeset-drift-command-help.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t40-changeset-drift-command-help::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          preflight = run.get('preflight') or {}
+          refused = preflight.get('refused') or {}
+          applied = run.get('apply') or {}
+          drift = run.get('drift') or {}
+          rollbackRefused = drift.get('rollbackRefused') or {}
+          rollback = run.get('rollback') or {}
+          help_ = run.get('help') or {}
+          trace = run.get('trace') or {}
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"staged selectable={preflight.get('selectable')} liveUnchanged={preflight.get('liveUnchangedBeforeApply')}",
+              f"preflight {refused.get('code')} refused={refused.get('refusedRelativePath')} bothUntouched={refused.get('bothFilesUntouched')} digestsShown={refused.get('uiNamesFileAndBothDigests')} ledgerChangesets={refused.get('ledgerChangesets')}",
+              f"apply {applied.get('changesetId')} files={applied.get('fileCount')} atomic={applied.get('atomic')} everyVerified={applied.get('everyFileVerifiedOnDisk')} backupHoldsBoth={applied.get('backupHoldsBothPriorFiles')} ui={applied.get('uiShowsChangesetAndRollback')}",
+              f"disk intact={drift.get('intactBeforeEdit')} modified={drift.get('modifiedAfterEdit')} path={drift.get('modifiedRelativePath')} bothDigests={drift.get('bothDigestsShown')}",
+              f"rollbackRefused {rollbackRefused.get('code')} restoredNothing={rollbackRefused.get('restoredNothing')} externalEditIntact={rollbackRefused.get('externalEditIntact')} ui={rollbackRefused.get('uiSaidRefused')}",
+              f"rollback files={rollback.get('fileCount')} byteIdentical={rollback.get('byteIdentical')} everyVerified={rollback.get('everyFileVerifiedOnDisk')} uiConfirmed={rollback.get('uiConfirmed')}",
+              f"help rows={help_.get('rows')} shortcuts={help_.get('shortcuts')} byKey={help_.get('openedByKey')} byToggle={help_.get('openedByToggle')} filled={help_.get('templateFilledBar')} escape={help_.get('escapeDismissed')} lineSurvived={help_.get('typedLineSurvived')}",
+              f"trace applies={trace.get('applies')} ordered={trace.get('ordered')} complete={trace.get('complete')} counts {json.dumps(trace.get('counts') or {})}",
+              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])} scheduledRefusals {len(run.get('scheduledRefusals') or [])}",
+              f"screenshots {run.get('screenshots')}",
+          ]
+          failures = list(run.get('failures') or [])
+          failures += [{'message': message} for message in (run.get('consoleErrors') or [])]
+          failures += [{'message': message} for message in (run.get('pageErrors') or [])]
+          level = 'error' if failures else 'notice'
+          if failures:
+              def failure_text(failure):
+                  if isinstance(failure, dict):
+                      phase = failure.get('phase')
+                      message = str(failure.get('message') or failure)
+                      return (f'[{phase}] {message}' if phase else message)
+                  return str(failure)
+              parts.append('failures: ' + ' ~ '.join(failure_text(failure)[:200] for failure in failures[:10]))
+          message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t40-changeset-drift-command-help::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
+      # T-41 Step 4 (2026-11-22): the sandbox-test and evolution-bridge walk. Its annotation states
+      # the four claims by name - that the governance boundary refused every protected path with
+      # IMMUTABLE_GOVERNANCE_BOUNDARY and left all five files byte-identical, that a FAILING sandbox
+      # test made verified false and the apply was refused 409 APPLY_REFUSED_UNVERIFIED with the file
+      # untouched, that a PASSING one verified with the runner's own pass count and applied the file,
+      # and that the causal trace holds the whole chain with sourceProposalId on the verification.
+      - name: Publish the T-41 result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't41-sandbox-test-and-evolution-bridge.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t41-sandbox-test-and-evolution-bridge::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          boundary = run.get('boundary') or {}
+          failing = run.get('failingTest') or {}
+          passing = run.get('passingTest') or {}
+          trace = run.get('trace') or {}
+          bridge = run.get('bridge') or {}
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"binary {os.path.basename(str(run.get('resolved', {}).get('executable')))}",
+              f"boundary {boundary.get('code')} refusedServer={boundary.get('refusedOnServer')} allFive={boundary.get('allFiveRefused')} intact={boundary.get('allFiveIntact')} proposals={boundary.get('proposalRecorded')} uiRefused={boundary.get('refusedInBrowser')}",
+              f"failingTest {failing.get('candidateId')} verified={failing.get('verified')} applyDisabled={failing.get('applyButtonDisabled')} server {failing.get('serverApplyStatus')} {failing.get('serverApplyCode')} outputShown={failing.get('failingOutputShown')} workspaceUnchanged={failing.get('workspaceUnchanged')}",
+              f"passingTest {passing.get('candidateId')} verified={passing.get('verified')} passed={passing.get('passedCount')} failed={passing.get('failedCount')} applied={passing.get('applied')} bytes={passing.get('bytesWritten')}",
+              f"trace(failing) entries={trace.get('entries')} kinds={','.join(trace.get('kinds') or [])} verifications={trace.get('verifications')} applies={trace.get('applies')} operations={trace.get('operations')} complete={trace.get('complete')}",
+              f"bridge {bridge.get('proposalId')} candidate={bridge.get('candidateId')} viaUiButton={bridge.get('stagedThroughUiButton')} sourceProposalId record={bridge.get('sourceProposalIdOnRecord')} api={bridge.get('sourceProposalIdInApi')} badge={bridge.get('sourceProposalIdBadgeVisible')} appliedTrace={bridge.get('sourceProposalIdOnTrace')} sandboxTest={bridge.get('sandboxTestOnTrace')} verifications={bridge.get('verificationsOnAppliedTrace')} applies={bridge.get('applies')} operations={bridge.get('operations')} applied={bridge.get('applied')} bytes={bridge.get('bytesWritten')} complete={bridge.get('complete')}",
+              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])} scheduledRefusals {len(run.get('scheduledRefusals') or [])}",
+              f"screenshots {run.get('screenshots')}",
+          ]
+          failures = list(run.get('failures') or [])
+          failures += [{'message': message} for message in (run.get('consoleErrors') or [])]
+          failures += [{'message': message} for message in (run.get('pageErrors') or [])]
+          level = 'error' if failures else 'notice'
+          if failures:
+              def failure_text(failure):
+                  if isinstance(failure, dict):
+                      phase = failure.get('phase')
+                      message = str(failure.get('message') or failure)
+                      return (f'[{phase}] {message}' if phase else message)
+                  return str(failure)
+              parts.append('failures: ' + ' ~ '.join(failure_text(failure)[:200] for failure in failures[:10]))
+          message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t41-sandbox-test-and-evolution-bridge::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
+      # T-43 Package 4: the workstation / git executive / telemetry walk. Its summary is written after
+      # every phase, so a walk killed by its own timeout still says which phase it died in. The
+      # annotation states the measured facts - the counts git reported, the +N/-N the hunks produced,
+      # the restore the ledger recorded, the host port the inspection found - because a red run has to
+      # say what disagreed, not only that something did.
+      - name: Publish the T-43 result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't43-workstation-git-telemetry.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t43-workstation-git-telemetry::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          status = run.get('status') or {}
+          diff = run.get('diff') or {}
+          checkpoint_data = run.get('checkpoint') or {}
+          restore = run.get('restore') or {}
+          drift = run.get('drift') or {}
+          trace = run.get('trace') or {}
+          telemetry = run.get('telemetry') or {}
+          router = run.get('router') or {}
+          repo = run.get('repo') or {}
+          contrast = run.get('contrast') or {}
+          ratios = [entry.get('ratio') for entry in (contrast.get('samples') or []) if entry.get('ratio') is not None]
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"platform {run.get('platform')}",
+              f"repo {str(repo.get('headSha') or '')[:7]} branch={repo.get('branch')}",
+              f"status branch={status.get('branch')} head={str(status.get('headSha') or '')[:7]} staged={status.get('staged')} unstaged={status.get('unstaged')} untracked={status.get('untracked')} checkpoints={status.get('checkpointsCount')}",
+              f"diff +{diff.get('additions')}/-{diff.get('deletions')} hunks={diff.get('hunks')} truncated={diff.get('truncated')} contrast {min(ratios):.2f}-{max(ratios):.2f}:1 over {len(ratios)} samples" if ratios else "diff contrast not measured",
+              f"checkpoint {checkpoint_data.get('checkpointId')} refResolves={checkpoint_data.get('refResolves')} worktreeUnchanged={checkpoint_data.get('worktreeUnchanged')}",
+              f"restore count={restore.get('restoreCount')} staged {restore.get('stagedBefore')}->{restore.get('stagedAfter')} untrackedUntouched={restore.get('untrackedUntouched')} refusal={(restore.get('refusal') or {}).get('code')}",
+              f"drift refIntact={drift.get('refIntact')} restoreDisabled={drift.get('restoreDisabled')} traceEnabled={drift.get('traceEnabled')}",
+              f"trace entries={trace.get('entries')} kinds={','.join(trace.get('kinds') or [])} complete={trace.get('complete')}",
+              f"telemetry {telemetry.get('platform')} total={telemetry.get('totalListening')} loopback={telemetry.get('loopbackOnly')} exposure={telemetry.get('externalExposure')} ownPort={telemetry.get('apexPort')} rss={telemetry.get('apexRssBytes')} excluded={len(telemetry.get('excluded') or [])}",
+              f"router git={'/'.join(filter(None, [str(router.get('gitStatus')), str(router.get('gitStatusTarget'))]))} diff={router.get('gitDiff')} ports={router.get('inspectPorts')} processes={router.get('inspectProcesses')}",
+              f"viewports {len(run.get('viewports') or [])} screens measured",
+              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])} reloadAborts {len(run.get('abortedStreams') or [])}",
+              f"screenshots {run.get('screenshots')}",
+              f"lastPhase {run.get('lastPhase')}",
+          ]
+          failures = list(run.get('failures') or [])
+          failures += [{'message': message} for message in (run.get('consoleErrors') or [])]
+          failures += [{'message': message} for message in (run.get('pageErrors') or [])]
+          level = 'error' if failures else 'notice'
+          if failures:
+              def failure_text(failure):
+                  if isinstance(failure, dict):
+                      phase = failure.get('phase')
+                      message = str(failure.get('message') or failure)
+                      return (f'[{phase}] {message}' if phase else message)
+                  return str(failure)
+              parts.append('failures: ' + ' ~ '.join(failure_text(failure)[:200] for failure in failures[:10]))
+          message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t43-workstation-git-telemetry::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
+      # T-44 Package 4: the standing-orders and agenda walk. The annotation states the measured facts -
+      # which capability was delegated, what the run produced, what the latch refused, which horizon the
+      # commitment landed in, and the contrast range the two panels actually rendered - because a red run
+      # has to say what disagreed, not only that something did.
+      - name: Publish the T-44 result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't44-standing-orders-agenda.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t44-standing-orders-agenda::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          order = run.get('order') or {}
+          one = run.get('runOne') or {}
+          refusal = run.get('refusal') or {}
+          toggle = run.get('toggle') or {}
+          lockdown = run.get('lockdown') or {}
+          trace = run.get('trace') or {}
+          agenda = run.get('agenda') or {}
+          derived = run.get('derived') or {}
+          complete = run.get('complete') or {}
+          contrast = run.get('contrast') or {}
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"platform {run.get('platform')}",
+              f"order {order.get('orderId')} caps={len(order.get('capabilities') or [])} status={order.get('status')} runs={order.get('runs')}",
+              f"run {one.get('operationId')} outcome={one.get('outcome')} inLedger={one.get('ledgerFound')}",
+              f"refusal {refusal.get('status')} {refusal.get('code')} ledger={refusal.get('ledgerCount')}",
+              f"toggle {toggle.get('paused')}->{toggle.get('resumed')}",
+              f"lockdown invoke={lockdown.get('invokeStatus')} {lockdown.get('invokeCode')} create={lockdown.get('createStatus')} runsAfterRelease={lockdown.get('runCountAfterRelease')} outcome={lockdown.get('lastOutcomeAfterRelease')}",
+              f"trace entries={trace.get('entries')} kinds={','.join(trace.get('kinds') or [])} reachesRun={trace.get('reachesRun')} namesOperation={trace.get('namesOperation')}",
+              f"agenda {agenda.get('itemId')} horizon={agenda.get('horizon')} linked={agenda.get('linkedTo')}",
+              f"derived standingOrderRows={derived.get('standingOrderRows')}",
+              f"complete {complete.get('status')} at={complete.get('completedAt')}",
+              f"router {str((run.get('router') or {}).get('schedule') or '')[:80]}",
+              f"contrast worst={contrast.get('minimum')}:1 over {contrast.get('samples')} samples" if contrast.get('minimum') is not None else 'contrast not measured',
+              f"viewports {len(run.get('viewports') or [])} measured",
+              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])} reloadAborts {len(run.get('abortedStreams') or [])}",
+              f"screenshots {run.get('screenshots')}",
+              f"lastPhase {run.get('lastPhase')}",
+          ]
+          failures = list(run.get('failures') or [])
+          failures += [{'message': message} for message in (run.get('consoleErrors') or [])]
+          failures += [{'message': message} for message in (run.get('pageErrors') or [])]
+          level = 'error' if failures else 'notice'
+          if failures:
+              def failure_text(failure):
+                  if isinstance(failure, dict):
+                      phase = failure.get('phase')
+                      message = str(failure.get('message') or failure)
+                      return (f'[{phase}] {message}' if phase else message)
+                  return str(failure)
+              parts.append('failures: ' + ' ~ '.join(failure_text(failure)[:200] for failure in failures[:10]))
+          message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t44-standing-orders-agenda::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
+      - name: Publish the T-45 result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't45-playbooks-watchpoints-overlay.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t45-playbooks-watchpoints-overlay::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          templates = run.get('templates') or {}
+          one = run.get('runOne') or {}
+          trace = run.get('trace') or {}
+          wps = run.get('watchpoints') or {}
+          breached = wps.get('breached') or {}
+          nominal = wps.get('nominal') or {}
+          lockdown = run.get('lockdown') or {}
+          overlay = run.get('overlay') or {}
+          router = run.get('router') or {}
+          contrast = run.get('contrast') or {}
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"platform {run.get('platform')}",
+              f"templates {templates.get('count')} ids={','.join(templates.get('ids') or [])}",
+              f"dag {templates.get('dag')}",
+              f"run {one.get('runId')} status={one.get('status')} steps={len(one.get('steps') or [])} receipts={one.get('ledgerFound')}",
+              f"trace complete={trace.get('resolved')} namesEveryOperation={trace.get('namesEveryOperation')}",
+              f"watchpoint breached={breached.get('watchpointId')} value={breached.get('measured')} state={breached.get('state')}",
+              f"watchpoint nominal={nominal.get('watchpointId')} state={nominal.get('state')}",
+              f"lockdown launch={lockdown.get('launchStatus')} {lockdown.get('launchCode')} evaluate={lockdown.get('evaluateStatus')} {lockdown.get('evaluateCode')} create={lockdown.get('createStatus')} runsUnchanged={lockdown.get('runsUnchanged')}",
+              f"overlay initial={((overlay.get('initial') or {}).get('button'))} on={((overlay.get('on') or {}).get('button'))} persisted={overlay.get('persistedAcrossReload')} off={((overlay.get('off') or {}).get('button'))}",
+              f"router playbook={((router.get('playbook') or {}).get('capability'))} watchpoint={((router.get('watchpoint') or {}).get('capability'))} overlay={((router.get('overlay') or {}).get('route'))}",
+              f"contrast worst={contrast.get('minimum')}:1 over {contrast.get('samples')} samples" if contrast.get('minimum') is not None else 'contrast not measured',
+              f"viewports {len(run.get('viewports') or [])} measured (both postures)",
+              f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])} reloadAborts {len(run.get('abortedStreams') or [])}",
+              f"screenshots {run.get('screenshots')}",
+              f"lastPhase {run.get('lastPhase')}",
+          ]
+          failures = list(run.get('failures') or [])
+          failures += [{'message': message} for message in (run.get('consoleErrors') or [])]
+          failures += [{'message': message} for message in (run.get('pageErrors') or [])]
+          level = 'error' if failures else 'notice'
+          if failures:
+              def failure_text(failure):
+                  if isinstance(failure, dict):
+                      phase = failure.get('phase')
+                      message = str(failure.get('message') or failure)
+                      return (f'[{phase}] {message}' if phase else message)
+                  return str(failure)
+              # The annotation is what this environment can read without the job log, so the failure is
+              # given room rather than 200 characters: an assertion's whole message can be the phrase
+              # "Expected: true Received: false", and truncating it names the phase while hiding the cause.
+              parts.append('failures: ' + ' ~ '.join(failure_text(failure)[:1200] for failure in failures[:6]))
+          message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t45-playbooks-watchpoints-overlay::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
+      # T-46 STEP 0 (2026-11-19): the experience walk publishes its own annotation. It is the only
+      # suite whose subject is the layout, so the annotation carries the numbers a review can disagree
+      # with: the header's height and row count, the Core's offset from the viewport centre, the
+      # document's scroll height against the viewport's, and whether the command bar was on screen
+      # without scrolling - at each of the three viewports. A red run names the gate that failed and the
+      # measurement that failed it, because "Expected: true Received: false" does not tell an owner
+      # which pixel moved.
+      - name: Publish the T-46 experience result
+        if: always()
+        run: |
+          python3 - "${{ steps.browser.outcome }}" <<'PY'
+          import json, os, sys
+          outcome = sys.argv[1] if len(sys.argv) > 1 else 'unknown'
+          path = os.path.join('apex_app', 'reports', 't46-experience.json')
+          if not os.path.exists(path):
+              print(f'::notice title=t46-experience-pass::no summary was written; the suite did not run (browser step: {outcome})')
+              sys.exit(0)
+          run = json.load(open(path, encoding='utf-8'))
+          gates = run.get('gates') or {}
+          parts = [
+              f"browser {run.get('browserVersion') or 'unresolved'}",
+              f"platform {run.get('platform')}",
+              f"headerMax {gates.get('headerMaxHeightPx')}px coreTolerance {int((gates.get('coreCentreToleranceRatio') or 0) * 100)}%",
+              f"screenshots {run.get('screenshots')}",
+          ]
+          for row in (run.get('baseline') or []):
+              parts.append(
+                  f"{row.get('viewport')} {row.get('width')}x{row.get('height')}"
+                  f" header {row.get('headerHeight')}px/{row.get('headerRows')}row"
+                  f" coreX {((row.get('coreCentre') or {}).get('x'))} delta {round((row.get('coreDeltaRatio') or 0) * 100, 1)}%"
+                  f" coreWidest {row.get('coreIsWidest')}"
+                  f" scroll {row.get('scrollHeight')}/{row.get('innerHeight')}"
+                  f" scrolls {row.get('documentScrolls')}"
+                  f" deck {row.get('deckHeight')}px"
+                  f" barOnScreen {row.get('commandBarOnScreen')} ({row.get('commandBarPosition')})"
+              )
+          contrast = run.get('contrast') or {}
+          if contrast.get('minimum') is not None:
+              parts.append(f"contrast worst={round(contrast['minimum'], 2)}:1 over {contrast.get('samples')} samples")
+          behaviour = run.get('behaviour') or {}
+          if behaviour:
+              hb = behaviour.get('heartbeat') or {}
+              parts.append(
+                  f"heartbeat beats={hb.get('beats')} firstMs={hb.get('firstBeatMs')}"
+                  f" degradedMs={behaviour.get('degradedAfterMs')}"
+                  f" recovered={behaviour.get('recoveredConnectivity')}"
+              )
+          parts.append(f"console {len(run.get('consoleErrors') or [])} page {len(run.get('pageErrors') or [])} requests {len(run.get('failedRequests') or [])} reloadAborts {run.get('abortedStreams')}")
+          parts.append(f"lastPhase {run.get('lastPhase')}")
+          failures = list(run.get('failures') or [])
+          failures += [{'message': message} for message in (run.get('consoleErrors') or [])]
+          failures += [{'message': message} for message in (run.get('pageErrors') or [])]
+          # A soft assertion does not throw, so it never reaches run.failures - the first version of
+          # this publisher printed `notice` on a run whose gates had failed, which is worse than no
+          # annotation at all. The gates are read from gatesJudged, which the spec fills for every gate.
+          failed_gates = [entry for entry in (run.get('gatesJudged') or []) if entry.get('ok') is not True]
+          failures += [{'phase': 'gate', 'message': str(entry.get('gate')) + ' — ' + str(entry.get('detail'))}
+                       for entry in failed_gates]
+          parts.append('gates ' + str(len(run.get('gatesJudged') or []) - len(failed_gates))
+                       + '/' + str(len(run.get('gatesJudged') or [])) + ' passed')
+          level = 'error' if failures else 'notice'
+          if failures:
+              def failure_text(failure):
+                  if isinstance(failure, dict):
+                      phase = failure.get('phase')
+                      message = str(failure.get('message') or failure)
+                      return (f'[{phase}] {message}' if phase else message)
+                  return str(failure)
+              # Room rather than 200 characters: an assertion's whole message can be the phrase
+              # "Expected: true Received: false", and truncating it names the phase while hiding the cause.
+              parts.append('failures: ' + ' ~ '.join(failure_text(failure)[:1200] for failure in failures[:6]))
+          message = ' | '.join(str(part) for part in parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::{level} title=t46-experience-pass::{message[:20000]}')
+          if failures:
+              sys.exit(1)
+          PY
+
+      # T-42 Step 4: the publisher above is not allowed to be the only witness. If it throws before
+      # printing (as it did on run 45099159487, where a missing binding raised NameError and the
+      # annotation that would have named the failing assertion was never written), this step still
+      # states what the suite recorded. A red t41 must always say why.
+      - name: Publish the raw T-41 report if the publisher failed
+        if: always()
+        run: |
+          path=apex_app/reports/t41-sandbox-test-and-evolution-bridge.json
+          if [ ! -f "$path" ]; then
+            echo '::notice title=t41-raw::no report file was written at all'
+            exit 0
+          fi
+          python3 - "$path" <<'RAWPY'
+          import json, sys
+          run = json.load(open(sys.argv[1], encoding='utf-8'))
+          failures = run.get('failures') or []
+          if not failures and not run.get('consoleErrors') and not run.get('pageErrors'):
+              print('::notice title=t41-raw::the report records no failure')
+              sys.exit(0)
+          parts = []
+          for failure in failures[:10]:
+              if isinstance(failure, dict):
+                  phase = failure.get('phase')
+                  message = str(failure.get('message') or failure)
+                  parts.append((f'[{phase}] {message}' if phase else message)[:600])
+              else:
+                  parts.append(str(failure)[:600])
+          parts += [f'console: {m}'[:400] for m in (run.get('consoleErrors') or [])[:5]]
+          parts += [f'page: {m}'[:400] for m in (run.get('pageErrors') or [])[:5]]
+          text = ' ~ '.join(parts).replace('%', '%25').replace('\r', '').replace('\n', ' ')
+          print(f'::error title=t41-raw::{text[:20000]}')
+          RAWPY
+
+      - name: Keep the browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t31-t32-real-browser
+          path: |
+            apex_app/reports/screenshots
+            apex_app/test-results/playwright
+            apex_app/reports/screenshots/t32
+            apex_app/reports/screenshots/t33
+            apex_app/reports/screenshots/t34
+            apex_app/reports/t33-executive-loop.json
+            apex_app/reports/t34-mission-dag.json
+            apex_app/reports/screenshots/t35
+            apex_app/reports/t35-stepdown-handoff-doctor.json
+            apex_app/reports/screenshots/t36
+            apex_app/reports/t36-cold-boot-unseeded.json
+            apex_app/reports/screenshots/t37
+            apex_app/reports/t37-neural-council-router.json
+            apex_app/reports/screenshots/t38
+            apex_app/reports/t38-values-workspace-trace.json
+            apex_app/reports/screenshots/t39
+            apex_app/reports/t39-workshop-apply-rollback.json
+            apex_app/reports/screenshots/t40
+            apex_app/reports/t40-changeset-drift-command-help.json
+            apex_app/reports/screenshots/t41
+            apex_app/reports/t41-sandbox-test-and-evolution-bridge.json
+            apex_app/reports/screenshots/t43
+            apex_app/reports/t43-workstation-git-telemetry.json
+            apex_app/reports/screenshots/t44
+            apex_app/reports/t44-standing-orders-agenda.json
+            apex_app/reports/screenshots/t45
+            apex_app/reports/t45-playbooks-watchpoints-overlay.json
+            apex_app/reports/t46-experience.json
+            apex_app/artifacts/t46
+          if-no-files-found: warn
+          retention-days: 14
+
+      # T-30 S4 (2026-11-19): a red run's log lives behind a download this environment cannot
+      # reach, so the failing test names are echoed as one annotation, which the checks API can be
+      # read back without fetching the log.
+      - name: Report failing tests
+        if: failure()
+        run: |
+          log="$RUNNER_TEMP/apex-test.log"
+          summary="no test log was written"
+          if [ -f "$log" ]; then
+            summary="$(grep -E '^[[:space:]]*not ok [0-9]+' "$log" | head -30 | sed 's/^[[:space:]]*//' | paste -sd ' | ' -)"
+            [ -n "$summary" ] || summary="the suite failed without a 'not ok' line"
+          fi
+          summary="${summary//$'\n'/ }"
+          echo "::error title=apex-test-failures::${summary:0:30000}"
+          # The assertion text is what identifies the cause, so it is flattened into a second
+          # annotation next to the names above.
+          details=""
+          if [ -f "$log" ]; then
+            details="$(grep -E '^[[:space:]]*not ok [0-9]+|error:|Expected|actual:|expected:|stack:' "$log" | head -120 | sed 's/^[[:space:]]*//' | paste -sd ' ~ ' -)"
+          fi
+          details="${details//$'\n'/ }"
+          echo "::error title=apex-test-details::${details:0:30000}"

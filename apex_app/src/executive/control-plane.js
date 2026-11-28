@@ -3,7 +3,7 @@
 // This first T-17 boundary supports explicit user actions and bounded in-process delegation grants;
 // it does not claim owner MFA, persistent policy storage, or a connected agent runtime.
 import { randomUUID } from 'node:crypto';
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { redactSecrets } from '../security/secrets.js';
@@ -86,11 +86,16 @@ export class ExecutiveControlPlane {
   #idFactory;
   #levels;
   #killSwitchPath;
+  #stepUp = null;
   #grants = new Map();
   #killSwitch = { active: false, activatedAt: null, reason: null, history: [] };
   #cancellables = new Map();
 
-  constructor({ capabilityLookup, autonomyByDomain = {}, now = () => new Date(), idFactory = randomUUID, killSwitchPath = null } = {}) {
+  // T-31 Step 3: step-up. When a secret is configured, the two acts that can undo a safety control
+  // or change APEX's own behaviour require it as well as the reason and the confirmation. The
+  // secret is hashed at construction and never stored or reported; a missing verification fails
+  // closed rather than being treated as "not configured".
+  constructor({ capabilityLookup, autonomyByDomain = {}, now = () => new Date(), idFactory = randomUUID, killSwitchPath = null, stepUpSecret = null } = {}) {
     if (typeof capabilityLookup !== 'function') throw new TypeError('ECP requires the capability registry lookup');
     if (!autonomyByDomain || typeof autonomyByDomain !== 'object' || Array.isArray(autonomyByDomain)) {
       throw new TypeError('autonomyByDomain must be an object');
@@ -99,6 +104,12 @@ export class ExecutiveControlPlane {
     this.#now = now;
     this.#idFactory = idFactory;
     this.#killSwitchPath = typeof killSwitchPath === 'string' && killSwitchPath.length > 0 ? path.resolve(killSwitchPath) : null;
+    if (stepUpSecret !== null && stepUpSecret !== undefined) {
+      if (typeof stepUpSecret !== 'string' || stepUpSecret.length < 16) {
+        throw new TypeError('a step-up secret must be a string of at least 16 characters');
+      }
+      this.#stepUp = createHash('sha256').update(stepUpSecret, 'utf8').digest();
+    }
     this.#levels = new Map();
     for (const [domain, level] of Object.entries(autonomyByDomain)) {
       if (!/^[a-z][a-z0-9_]{0,31}$/.test(domain)) throw new TypeError(`invalid autonomy domain: ${domain}`);
@@ -443,6 +454,48 @@ export class ExecutiveControlPlane {
       policyUnavailable: this.#killSwitch.policyUnavailable === true,
       cancellableOperations: this.#cancellables.size,
       persistence: this.#killSwitchPath ? 'durable local latch; corruption fails closed' : 'process-local; not durable across restart',
+    });
+  }
+
+  // Read-only: whether step-up is configured and which capabilities it covers. It never returns
+  // the secret, a digest of it, or its length.
+  stepUpStatus() {
+    return Object.freeze({
+      schema: 'apex.step-up/1',
+      configured: this.#stepUp !== null,
+      // T-39: the two Workshop writes take the step-up too. These are the only capabilities in the
+      // system whose refusal costs nothing if the proof is absent and everything if it is not: an
+      // unproven apply writes into the owner's real tree.
+      // T-43 Package 1 adds the two git writes. A checkpoint create writes a ref into the owner's
+      // repository and a checkpoint restore overwrites tracked files in it, so both are exactly the
+      // class of act the list exists for: refused without proof costs nothing, unproven it can cost the
+      // owner their working tree.
+      appliesTo: Object.freeze(['safety.release', 'evolution.decide', 'workshop.apply_file',
+        'workshop.rollback_file', 'workshop.apply_changeset', 'workshop.rollback_changeset',
+        'git.checkpoint_create', 'git.checkpoint_restore']),
+      method: 'shared secret, hashed and compared in constant time',
+      note: this.#stepUp === null
+        ? 'No step-up secret is configured, so step-up is not required. The reason and the explicit confirmation are still required.'
+        : 'A step-up secret is configured: the acts listed above are refused without it.',
+    });
+  }
+
+  // The verification itself. A capability outside `appliesTo` is never gated. When step-up is
+  // configured, anything other than a matching proof is a refusal with its own reason.
+  verifyStepUp(proof, { capability = null } = {}) {
+    const applies = capability === null || this.stepUpStatus().appliesTo.includes(capability);
+    if (!applies) return Object.freeze({ ok: true, configured: this.#stepUp !== null, required: false, reason: 'STEP_UP_NOT_APPLICABLE' });
+    if (this.#stepUp === null) return Object.freeze({ ok: true, configured: false, required: false, reason: 'STEP_UP_NOT_CONFIGURED' });
+    if (typeof proof !== 'string' || proof.length === 0) {
+      return Object.freeze({ ok: false, configured: true, required: true, reason: 'STEP_UP_REQUIRED' });
+    }
+    const digest = createHash('sha256').update(proof, 'utf8').digest();
+    const matches = digest.length === this.#stepUp.length && timingSafeEqual(digest, this.#stepUp);
+    return Object.freeze({
+      ok: matches,
+      configured: true,
+      required: true,
+      reason: matches ? 'STEP_UP_VERIFIED' : 'STEP_UP_REJECTED',
     });
   }
 

@@ -7,6 +7,25 @@ import { ConversationStore } from './memory/conversation-store.js';
 import { OperationLog } from './operations/operation-log.js';
 import { ActionRegistry } from './actions/registry.js';
 import { builtinActions } from './actions/builtin.js';
+import { GitExecutive, gitExecutiveActions } from './capabilities/git-executive.js';
+import { ProcessPortInspector, processPortActions } from './perception/process-port-inspector.js';
+// T-44 Package 1 (2026-11-19): the governed Standing Orders engine. A standing order is a bounded
+// delegation, so the engine constructs against the registry and refuses anything the ECP may not run
+// above L2 Confirm. Its capabilities are registered like every other capability; its runs go through
+// the controller, which is attached once the controller exists.
+import { StandingOrdersEngine, standingOrderActions, standingOrderReadActions } from './executive/standing-orders.js';
+// T-44 Package 2 (2026-11-19): the unified executive agenda. One ledger of the owner's own commitments,
+// plus a reading of four stores that already hold what else is owed. It writes only its own ledger.
+import { ExecutiveAgenda, agendaActions } from './executive/agenda.js';
+// T-45 Package 1 (2026-11-19): the Executive Playbooks engine. A playbook is a curated multi-step routine
+// whose steps form a DAG: two roots that do not depend on each other, then a fan-in step that runs only if
+// both verified. Every step goes through the controller, so a routine composes real capabilities rather
+// than adding a second way to execute.
+import { ExecutivePlaybooks, playbookActions, playbookReadActions } from './executive/playbooks.js';
+// T-45 Package 2 (2026-11-19): Sentinel Watchpoints. Owner-set thresholds on numbers the machine already
+// measures. The engine reads the measuring capability through the registry, so a threshold can never
+// disagree with the panel showing the same number.
+import { SentinelWatchpoints, watchpointActions } from './perception/watchpoints.js';
 import { knowledgeActions } from './actions/knowledge-actions.js';
 import { worldActions } from './actions/world-actions.js';
 import { worldModelActions } from './actions/world-model-actions.js';
@@ -53,16 +72,39 @@ import { DeadlineStore } from './deadlines/store.js';
 import { deadlineActions } from './actions/deadline-actions.js';
 import { backupActions } from './actions/backup-actions.js';
 import { councilActions, createCouncilService } from './actions/council-actions.js';
+// T-37 Step 1: the 8-region LIF/STDP substrate and its versioned bridge, plus the capabilities that
+// step and read them. Track 2 produces candidate associations; it authorizes nothing.
+import { neuralActions, createNeural } from './actions/neural-actions.js';
+// T-37 Step 3: the deterministic executive command router. No inference; every route names a
+// capability or hands the line to the T-29 pipeline.
+import { createCommandRouter } from './cognition/command-router.js';
 import { workshopActions } from './actions/workshop-actions.js';
+import { evolutionActions } from './actions/evolution-actions.js';
+import { briefingActions } from './actions/briefing-actions.js';
+import { presenceHandoffActions } from './actions/presence-handoff-actions.js';
+import { createPresenceHandoffs } from './presence/handoff.js';
+import { createBriefingService } from './briefing/service.js';
+import { createEvolutionLab } from './evolution/lab.js';
 import { goalActions } from './actions/goal-actions.js';
 import { planActions } from './actions/plan-actions.js';
 import { proposalActions } from './actions/proposal-actions.js';
 import { workActions } from './actions/work-actions.js';
 import { taskFeedbackActions } from './actions/task-feedback-actions.js';
 import { safetyActions } from './actions/safety-actions.js';
+import { cognitionActions } from './actions/cognition-actions.js';
+import { createCognitivePipeline } from './cognition/pipeline.js';
 import { CAPTURE_OFF } from './experience/capture.js';
 import { ResourceFabric } from './resources/fabric.js';
-import { createWorkshopService } from './workshop/service.js';\nimport { DeviceTrustService } from './security/device-trust.js';
+import { createWorkshopService } from './workshop/service.js';
+import { WorkshopSandbox } from './workshop/sandbox.js';
+import { WorkshopApplier } from './workshop/applier.js';
+import { MemoryTraceService } from './memory/trace.js';
+import { createPerceptionService } from './perception/service.js';
+import { perceptionActions } from './actions/perception-actions.js';
+import { DeviceTrustService } from './security/device-trust.js';
+import { createDoctor } from './system/doctor.js';
+import { createWorkstationBootstrap } from './system/bootstrap.js';
+import { systemBootstrapActions } from './actions/system-bootstrap-actions.js';
 
 export function createApp({
   dataDir,
@@ -76,8 +118,20 @@ export function createApp({
   filesystemMaxReadBytes = DEFAULT_FILESYSTEM_MAX_READ_BYTES,
   filesystemListDefaultLimit = FILESYSTEM_LIST_DEFAULT_LIMIT,
   filesystemListMaxLimit = FILESYSTEM_LIST_MAX_LIMIT,
+  // T-31 Step 3: an optional step-up secret. Off by default, so every existing deployment keeps its
+  // exact behaviour; when set, safety.release and evolution.decide require it in addition to the
+  // typed reason and the explicit confirmation.
+  stepUpToken = null,
   experienceCapture = CAPTURE_OFF,
   neuralRuntime = null,
+  // T-37 Step 1: the Track 2 substrate seed. It is an option so a test can pin a substrate that is
+  // reproducible across processes; the default is the declared constant in substrate.js.
+  neuralSeed = null,
+  // T-42 Step 2: the owner's quiet-hours window. Off unless set, so nothing changes by default.
+  quietHours = undefined,
+  // T-42 Step 2: an injectable perception sensor. A test pins the host half so the reading is the
+  // same on a busy CI runner as on an idle laptop; the product always uses the real sensor.
+  perceptionSensor = null,
   integrationProviders = null,
   autonomyByDomain = {},
 } = {}) {
@@ -100,6 +154,9 @@ export function createApp({
     now: clock,
     idFactory,
     killSwitchPath: path.join(dataDir, 'kill-switch.json'),
+    // Absent by default: a deployment opts into step-up by setting APEX_STEP_UP_TOKEN, and the ECP
+    // then refuses the two acts that need it until the proof matches.
+    stepUpSecret: stepUpToken ?? null,
   });
   const goals = new GoalStore(path.join(dataDir, 'goals.jsonl'), { now: clock, idFactory, operations });
   const plans = new PlanStore(path.join(dataDir, 'plans.jsonl'), {
@@ -249,17 +306,188 @@ export function createApp({
     );
   }
 
+  // T-43 Package 1: the git executive. It is constructed only when a workspace root is configured,
+  // because a git engine without a repository is a surface that can only ever report "no repository".
+  // Its checkpoints land in the APEX data directory, not in the workspace: the record of what the tree
+  // looked like belongs with the other ledgers, not in the tree it describes.
+  //
+  // The operation writer is the same `operations.jsonl` the audit path appends to, so a checkpoint
+  // create or restore produces one readable line in the ledger the trace already walks. The promise is
+  // not awaited here because the git call itself is synchronous and must not be made to wait on the
+  // audit; the record's own verification never depends on the append having succeeded.
+  let gitExecutive = null;
+  if (rootForContext !== null && rootForContext !== undefined) {
+    gitExecutive = new GitExecutive({
+      workspaceRoot: rootForContext,
+      dataDir,
+      now: clock,
+      operations: (entry) => { operations.append({
+        id: `${entry.capability}-${entry.checkpointId}`,
+        requestedAt: entry.at,
+        capability: entry.capability,
+        origin: 'user',
+        status: 'success_verified',
+        request: `${entry.capability} ${entry.checkpointId}`,
+        steps: [{ action: entry.capability, checkpointId: entry.checkpointId, verified: entry.verified === true }],
+      }).catch(() => {}); },
+    });
+  }
+
+  // T-43 Package 2: the process and port inspector. It is constructed unconditionally because it reads
+  // the host rather than the workspace, and it is injected rather than reached for from the route so a
+  // test can hold the machine still.
+  const processInspector = new ProcessPortInspector({ now: clock });
+
+  // T-44 Package 1: the Standing Orders engine. It reads the registry's own declarations to decide what
+  // a standing order may carry, so it is constructed before registration and its five capabilities are
+  // registered with the rest. The operations writer is the same `operations.jsonl` the audit path uses,
+  // so an order's creation, toggling and every run are readable in the one ledger the trace walks.
+  const standingOrders = new StandingOrdersEngine({
+    dataDir,
+    registry,
+    now: clock,
+    operations: (entry) => operations.append(entry),
+  });
+
+  // T-45 Package 1: the Playbooks engine. Built before registration because it checks each template step
+  // against the registry's declarations at launch time, and registered with the rest so a launch is
+  // authorized like any other act. The controller is attached below, once it exists.
+  const playbooks = new ExecutivePlaybooks({
+    dataDir,
+    registry,
+    now: clock,
+    operations: (entry) => operations.append(entry),
+  });
+
+  // T-45 Package 2: the Sentinel Watchpoints engine. It reads metrics through the registry, so it needs
+  // the registry and nothing else; the latch it honours is the Standing Orders engine's own reading, which
+  // is the control plane's latch.
+  const watchpoints = new SentinelWatchpoints({
+    dataDir,
+    registry,
+    now: clock,
+    operations: (entry) => operations.append(entry),
+    lockdown: () => standingOrders.lockdownActive(),
+  });
+
+  // T-44 Package 2: the executive agenda. Its four readers are closures, not snapshots: each one is
+  // called when the agenda is built, so the agenda can never report a mission that finished an hour ago
+  // as still running. Every reader is failure-safe at the agenda's boundary - a store that will not read
+  // is reported as failed rather than rendered as "nothing pending".
+  const agenda = new ExecutiveAgenda({
+    dataDir,
+    now: clock,
+    lockdown: () => standingOrders.lockdownActive(),
+    tasks: async () => {
+      if (!taskStore) return [];
+      const all = await taskStore.list();
+      // Only the missions that are live: a completed or cancelled task is not owed work, and a failed
+      // one is reported by the task panel rather than counted here as outstanding.
+      return all.filter((task) => ['running', 'paused', 'pending', 'proposed'].includes(task.status))
+        .map((task) => ({
+          id: task.id, goal: task.goal, status: task.status,
+          createdAt: task.createdAt ?? null, updatedAt: task.updatedAt ?? task.createdAt ?? null,
+        }));
+    },
+    approvals: async () => {
+      const all = await proposals.list();
+      return all.filter((proposal) => proposal.status === 'pending')
+        .map((proposal) => ({
+          id: proposal.id, kind: proposal.kind ?? null,
+          summary: proposal.summary ?? proposal.title ?? proposal.rationale ?? null,
+          createdAt: proposal.createdAt ?? null,
+        }));
+    },
+    advisories: async () => {
+      const readings = perception.advisories();
+      return Array.isArray(readings) ? readings : [];
+    },
+    standingOrders: async () => standingOrders.list().orders,
+    workshopCandidates: async () => {
+      const staged = workshopSandbox.list({ limit: 50 });
+      return Array.isArray(staged?.candidates) ? staged.candidates : [];
+    },
+  });
+
   // Council is constructed before action registration so its read-oriented actions are
   // registered exactly once, through the same registry/ECP path as every other capability.
-  const council = createCouncilService({ dataDir, now: clock, idFactory, registry, reasoning });
+  // T-37 Step 2: the Council also reads the safety latch, so its Values & Constraints Core can
+  // evaluate its lockdown rule. The read is of the latch's state; the Council cannot move it.
+  const council = createCouncilService({
+    dataDir, now: clock, idFactory, registry, reasoning,
+    controlPlane: registry.controlPlane,
+  });
 
   // The Workshop is a design sheet store: composition is a user write, inspection and simulation
   // are reads. Nothing in it executes code, and a simulation is never an authorization.
-  const workshop = createWorkshopService({ dataDir, now: clock });\n\n  // Device trust records enrollment and authenticates signed device messages. It does not\n  // grant capabilities; all action authorization remains with the existing ECP.\n  const deviceTrust = new DeviceTrustService(path.join(dataDir, 'devices.jsonl'), { now: clock, idFactory });
+  const workshop = createWorkshopService({ dataDir, now: clock });
+  // T-38 Step 2 (2026-11-21): the file-backed Workshop. The inspector reads the configured target
+  // workspace; the sandbox stages candidates under this data directory. The two never cross: the
+  // workspace root is opened for reading and every staged byte lives under `<dataDir>/workshop-sandbox`.
+  // T-38 Step 3 (2026-11-21): the cross-ledger trace and search. It reads six ledgers and writes
+  // none; it needs only the data directory, because every record it assembles already exists.
+  const memoryTrace = new MemoryTraceService({ dataDir, now: clock });
+  const workshopSandbox = new WorkshopSandbox({
+    dataDir,
+    workspaceRoot: rootForContext,
+    now: clock,
+    ...(idFactory ? { idFactory } : {}),
+  });
+  // T-39 Step 1 (2026-11-22): the applier is the one place that writes into the live workspace tree.
+  // It shares the sandbox's inspector, so an apply obeys exactly the containment a read obeys.
+  const workshopApplier = new WorkshopApplier({ dataDir, sandbox: workshopSandbox, now: clock });
+
+  // T-31 Step 2: the controlled Evolution Lab. It records proposals about APEX's own behaviour,
+  // the sandbox result that was measured for each one, and the owner's promotion decisions. It
+  // executes nothing: every act below is a user-origin capability the ECP authorizes.
+  const evolution = createEvolutionLab({ dataDir, now: clock, idFactory });
+
+  // T-32 Step 3: perception of the machine this process actually runs on. The sensor reads the host
+  // and the configured workspace (when there is one) and the service owns the observation ledger and
+  // the Sentinel's push discipline. It is constructed before action registration so
+  // perception.sense_host is registered through the same registry/ECP path as everything else.
+  const perception = createPerceptionService({
+    dataDir,
+    now: clock,
+    ...(idFactory ? { idFactory } : {}),
+    workspaceDir: rootForContext,
+    ...(quietHours === undefined || quietHours === null ? {} : { quietHours }),
+    ...(perceptionSensor === null ? {} : { sensor: perceptionSensor }),
+  });
+
+  // T-37 Step 1: Track 2. One deterministic spiking substrate per data directory, its versioned
+  // neural-cognitive bridge, and the ledger of steps that ran. It is constructed before action
+  // registration so `neural.step` is authorized by the same ECP path as every other write.
+  const neural = createNeural({ dataDir, now: clock, ...(neuralSeed ? { seed: neuralSeed } : {}) });
+
+  // Device trust records enrollment and authenticates signed device messages. It does not
+  // grant capabilities; all action authorization remains with the existing ECP.
+  const deviceTrust = new DeviceTrustService(path.join(dataDir, 'devices.jsonl'), { now: clock, idFactory });
 
   for (const def of [...builtinActions(), ...safetyActions(registry.controlPlane), ...knowledgeActions(knowledge), ...noteActions(notes), ...experienceActions(experience), ...learningActions(learning), ...situationActions(situation), ...predictionActions(predictions), ...historyActions({
       experience, predictions, world: worldModel, goals, plans, tasks: taskStore, memory, knowledge, operations,
-    }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...deadlineActions({ deadlines, roots: workspaces }), ...backupActions({ dataDir, appVersion: APP_VERSION }), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...councilActions(council), ...workshopActions(workshop), ...extraActions, ...fsActions]) registry.register(def);
+    }), ...goalActions(goals), ...planActions(plans), ...proposalActions(proposals), ...deadlineActions({ deadlines, roots: workspaces }), ...backupActions({ dataDir, appVersion: APP_VERSION }), ...workActions(), ...taskFeedbackActions(), ...worldActions(), ...worldModelActions(worldModel), ...councilActions(council), ...workshopActions(workshop), ...evolutionActions(evolution), ...perceptionActions(perception, { controlPlane: registry.controlPlane }), ...neuralActions(neural), ...extraActions, ...fsActions]) registry.register(def);
+
+  // T-43 Package 1: the four git capabilities, registered through the same registry and gated by the
+  // same ECP as everything else. They are conditional on a workspace root for the same reason the
+  // filesystem actions are: without a root there is no repository this build is authorized to read.
+  if (gitExecutive !== null) {
+    for (const def of gitExecutiveActions(gitExecutive)) registry.register(def);
+  }
+  // T-43 Package 2: the two host readings. Registered unconditionally, because a host reading needs no
+  // workspace root - the processes and sockets are the machine APEX is running on.
+  for (const def of processPortActions(processInspector)) registry.register(def);
+  // T-44 Package 1: five standing-order capabilities. Four are L2 writes on the order ledger itself and
+  // one is an L0 read that evaluates the triggers; none of them is a capability a standing order could
+  // itself carry, so the policy cannot be bootstrapped into delegating something forbidden.
+  for (const def of standingOrderActions(standingOrders)) registry.register(def);
+  // T-45 Packages 1 and 2: the playbook and watchpoint capabilities. They are registered here, with the
+  // other executive capabilities, because both engines check the registry's declarations to decide what
+  // they may do - a playbook step is checked against its capability's reversibility, and a watchpoint
+  // reads its metric by running the capability that owns it. Registering them late would mean an engine
+  // that could not see the very declarations it is governed by.
+  for (const def of playbookActions(playbooks)) registry.register(def);
+  for (const def of watchpointActions(watchpoints)) registry.register(def);
 
   const getStatus = async () => {
     const m = await memory.status();
@@ -272,7 +500,8 @@ export function createApp({
     const pr = await proposals.status();
     const wm = await worldModel.status();
     const dl = await deadlines.status();
-    const deviceStatus = await deviceTrust.status();\n    const current = await session.peek();
+    const deviceStatus = await deviceTrust.status();
+    const current = await session.peek();
     if (current.status === 'corrupt') {
       throw new StoreError(`${current.detail}; run "apex new" to start a new session`);
     }
@@ -321,7 +550,8 @@ export function createApp({
       corruptWorldModelLines: wm.counts === null ? null : wm.corrupt.length,
       worldModelDetail: wm.detail ?? null,
       sessionId: current.state?.sessionId ?? null,
-      model: gateway.describe(),\n      deviceTrust: deviceStatus,
+      model: gateway.describe(),
+      deviceTrust: deviceStatus,
       filesystemRoot: rootForContext,
       filesystemWorkspaces: workspaces === null ? [] : workspaces.list(),
     };
@@ -359,9 +589,23 @@ export function createApp({
     reasoning,
     dataDir,
     neural: neuralRuntime,
+    neuralService: neural,
     council,
     workshop,
+    workshopSandbox,
+    workshopApplier,
+    evolution,
   });
+  // T-44 Package 1: the controller is the one executor. Attaching it here, after construction and
+  // before the runtime is built, means every standing-order run from this point on goes through the
+  // same authorization, validation, execution and verification path as a route or a router line.
+  standingOrders.attachController(controller);
+  // T-45: the same executor, for the same reason. A playbook step that reached the control plane directly
+  // would produce an authorization with no execution behind it; a watchpoint that did would read a number
+  // that never appeared in a ledger.
+  playbooks.attachController(controller);
+  watchpoints.attachController(controller);
+
   const runtime = new ExecutiveRuntime({
     controller,
     situation,
@@ -380,8 +624,73 @@ export function createApp({
     idFactory,
   });
   const resources = new ResourceFabric({ now: clock });
-  return {
+
+  // T-29: the unified cognitive pipeline. It is constructed after the resource fabric so the
+  // salience stage can read real pressure, and its capability is registered through the same
+  // registry/ECP path as every other action: the pipeline orchestrates, the ECP authorizes.
+  const cognition = createCognitivePipeline({
+    dataDir,
+    registry,
+    controlPlane: registry.controlPlane,
     controller,
+    taskStore,
+    memory,
+    knowledge,
+    worldModel,
+    goals,
+    situation,
+    resources,
+    // T-32 Step 3: live host and workspace facts, so a cognitive run reads the machine it is on
+    // rather than only the stores it keeps.
+    perception,
+    // T-34 Step 1: a mission refuses an artifact this service cannot read, so the precondition is
+    // stated before the mission's first step is recorded.
+    workshop,
+    council,
+    // T-37 Step 1: Track 2's substrate is available to a cognitive run as a read-only salience
+    // modulation. The pipeline reads the bridge; it never steps the substrate, because stepping is
+    // a governed write the owner authorizes.
+    neural,
+    now: clock,
+    idFactory,
+  });
+  for (const def of cognitionActions(cognition)) registry.register(def);
+  // T-34 Step 3: the briefing checkpoints. The service reads the stores it is given and writes one
+  // file in the isolated data directory; acknowledging is a governed write (briefing.acknowledge).
+  const briefing = createBriefingService({
+    dataDir,
+    now: clock,
+    idFactory,
+    owners: { taskStore, perception, workshop, evolution, cognition },
+  });
+  for (const def of briefingActions(briefing)) registry.register(def);
+  // T-35 Step 2: the presence handoff envelopes. The ledger is local and append-only; the device ids
+  // are checked against the T-28 registry at staging and again at the claim, and the targets a
+  // handoff may name are looked up rather than trusted, so an envelope cannot point at a task or
+  // artifact that does not exist.
+  const handoffs = createPresenceHandoffs({
+    dataDir,
+    deviceTrust,
+    now: clock,
+    idFactory,
+    lookups: {
+      task: (taskId) => taskStore.get(taskId),
+      artifact: async (artifactId) => {
+        const found = await workshop.get(artifactId);
+        return found && found.found === true ? found.artifact ?? found : null;
+      },
+      checkpoint: async (checkpointId) => {
+        const recorded = await briefing.list({ limit: 200 });
+        return recorded.find((entry) => entry.id === checkpointId) ?? null;
+      },
+    },
+  });
+  for (const def of presenceHandoffActions(handoffs)) registry.register(def);
+  const app = {
+    controller,
+    // T-45: the two new engines, so the routes reach them without a second construction.
+    playbooks,
+    watchpoints,
     memory,
     conversation,
     session,
@@ -395,6 +704,20 @@ export function createApp({
     taskStore,
     summaryQueue,
     filesystemRoot: rootForContext,
+    // T-38 Step 2: the file-backed Workshop, so the UI routes reach the one sandbox the actions use.
+    workshopSandbox,
+    // T-39 Step 1: and its applier, so the apply and rollback routes reach the one ledger.
+    workshopApplier,
+    // T-43 Package 1: the git executive, so the git routes reach the one engine and its ledger.
+    gitExecutive,
+    // T-43 Package 2: the process and port inspector, for the telemetry route and the receipt.
+    processInspector,
+    // T-44 Package 1: the standing-orders engine, so the routes reach the one ledger and the one latch.
+    standingOrders,
+    // T-44 Package 2: the agenda, so the routes and the briefing panel reach one ledger.
+    agenda,
+    // T-38 Step 3: the cross-ledger trace and search, for the Memory Timeline.
+    memoryTrace,
     filesystemWorkspaces: workspaces,
     knowledge,
     notes,
@@ -414,7 +737,60 @@ export function createApp({
     reasoning,
     council,
     workshop,
+    evolution,
+    deviceTrust,
+    perception,
+    cognition,
+    briefing,
+    handoffs,
+    // T-37 Step 1: Track 2. Exposed so the UI server and the pipeline share the one substrate the
+    // actions already step - a second instance would be a second simulation, and the deck would be
+    // showing numbers no action produced.
+    neural,
   };
+  // T-36 Step 1: the doctor and the workstation bootstrap. The doctor is composed with the same
+  // application the deck reads, so its six checks are the running system's and not a second opinion
+  // built from environment variables; the bootstrap uses that doctor for its readiness gate. Both
+  // are attached to the application so the CLI, the desktop shell and the UI server share one
+  // instance of each rather than three readings of the same thing.
+  const doctor = createDoctor({ app, dataDir });
+  // T-44 Package 1: the doctor and the briefing as capabilities. They are not new behaviour - the same
+  // two services the read routes call - but a Standing Order may only carry a capability, and the brief
+  // names both in the safe set. Registering them keeps every delegation on the one execution path.
+  for (const def of standingOrderReadActions({ doctor, briefing })) registry.register(def);
+  // T-44 Package 2: four agenda capabilities. `agenda.list` is the one read and is offered to the model
+  // as well, because "what is owed today" is a question a reply may legitimately ask about the stores.
+  // The three writes are owner-only: a commitment is the owner's own statement of intent.
+  for (const def of agendaActions(agenda)) registry.register(def);
+  // T-45 Package 1: the catalog as a plain read, so `show playbooks` goes through a declaration rather
+  // than a second path into the engine.
+  for (const def of playbookReadActions(playbooks)) registry.register(def);
+  const bootstrap = createWorkstationBootstrap({ app, dataDir, now: clock, doctor });
+  for (const def of systemBootstrapActions(bootstrap)) registry.register(def);
+  app.doctor = doctor;
+  app.bootstrap = bootstrap;
+
+  // T-37 Step 3: the deterministic command router, composed with the controller so every route it
+  // names is authorized by the same registry and gated by the same ECP. It is attached before the
+  // server can serve a dispatch, and it reads the doctor and the briefing through `dispatchRead`
+  // below rather than through a second implementation of either.
+  app.dispatchRead = async (pathname) => {
+    try {
+      if (pathname === '/api/system/doctor') {
+        const report = await doctor.run();
+        return { ok: report?.status !== 'failed', status: 200, value: report };
+      }
+      if (pathname === '/api/briefing') {
+        const report = await briefing.latest();
+        return { ok: true, status: 200, value: report };
+      }
+      return { ok: false, status: 404, error: `this build cannot read ${pathname} internally` };
+    } catch (err) {
+      return { ok: false, status: 500, error: String(err?.message ?? err) };
+    }
+  };
+  app.commandRouter = createCommandRouter({ controller, app });
+  return app;
 }
 
 export function createAppFromEnv(env = process.env) {
@@ -431,6 +807,7 @@ export function createAppFromEnv(env = process.env) {
     filesystemListMaxLimit: config.filesystem.listMaxLimit,
     experienceCapture: config.experienceCapture,
     autonomyByDomain: config.autonomyByDomain,
+    stepUpToken: config.stepUpToken ?? null,
   });
   return { config, ...app };
 }

@@ -38,6 +38,18 @@ export const AUTO_CAPTURE_CAPABILITIES = Object.freeze([
 
 export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   read: 'its result is re-derivable from the stores at any time, so an experience of it would say less than a fresh read while making every later read slower',
+  // T-44 Package 1: a standing order's ledger is the richer record. It holds the trigger, the cooldown,
+  // the rate limit and every run with its operation id; an experience of one act would be a thinner copy
+  // of a row that already exists, and of a run whose real receipt is in operations.jsonl.
+  agenda: 'the agenda ledger already holds the commitment, its kind and priority, its due date and its status with the date it was completed, so an experience would be a thinner copy of a row that already exists',
+  orders: 'the standing-order ledger already holds the order, its trigger and every run with the operation each one recorded, and the run itself writes a full operation to operations.jsonl',
+  // T-45 Package 1: a playbook run's ledger is the richer record. It holds the routine, its three steps,
+  // each step's dependency and outcome, and the operation id each step recorded - so an experience of one
+  // launch would be a thinner copy of a row that already exists, and of three receipts already in the log.
+  playbooks: 'the playbook ledger already holds the run with each step, its dependency and the operation it recorded, and every step writes its own full operation to operations.jsonl',
+  // T-45 Package 2: a watchpoint is a rule plus a history of readings. The ledger holds the rule, the
+  // threshold, every evaluation with the number that caused it; an experience would be a thinner copy.
+  watchpoints: 'the watchpoint ledger already holds the rule, the threshold and every evaluation with the value measured against it, so an experience would be a thinner copy of a row that already exists',
   'model-words': 'what it stores or produces is a model conclusion, which is evidence only that a model said it',
   'self-bookkeeping': 'the experience log must not fill itself with records about its own bookkeeping, which would make the counts meaningless',
   task: 'one task operation covers several steps with separate outcomes, so a single experience would say less than the task log already says',
@@ -58,6 +70,15 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   // held in its own append-only log, and an experience of a composition would copy that design
   // into the log the pattern and adaptation reads draw from.
   workshop: 'it reads or writes the workshop design log, whose records are the user\'s own composed sheet; an experience of one would copy that design into the log the pattern and adaptation reads draw from',
+  // T-39: an apply or a rollback writes the owner's own file into the owner's own tree. The ledger
+  // and the causal trace already carry the digests, and an experience of the operation would put the
+  // file's content into the log the pattern and adaptation reads draw from.
+  'workspace-write': 'it writes a file into the owner\'s live workspace tree, whose content is the owner\'s own and is already recorded by digest in the apply ledger and the causal trace',
+  // T-43 Package 1: a checkpoint create or restore is recorded in `git-checkpoints.json` with the
+  // label, reason, snapshot commit, tree SHA, a per-file digest manifest and a restore history. That is
+  // a more complete account of the act than an experience record could be, and the causal trace reads
+  // it directly. A second summary in the experience log would be a lossy copy of a complete record.
+  git: 'it writes or restores a git checkpoint, whose full account — ref, snapshot commit, tree, per-file digests and restore history — is the checkpoint ledger the causal trace already reads',
   'no-action': 'the request ran no action, so there is no postcondition that could have been verified',
   // The prediction ledger's own operations. This is a separate category from `self-bookkeeping`
   // because the reason is not about filling a log with its own traffic: an experience answers "what
@@ -83,12 +104,56 @@ export const CAPTURE_EXCLUSION_CATEGORIES = Object.freeze({
   // to itself.
   situation: 'it records or reads the situational event log, its assessments, decisions, and responses; an experience of one would put the awareness bookkeeping into the log the pattern and adaptation reads draw from',
   learning: 'it records or reads APEX\'s own outcome evaluations, adaptation measurements, and rollbacks; an experience of one would put APEX\'s judgement about its own behaviour into the log the pattern and adaptation reads draw from',
+  // T-31 Step 2: a lab proposal, its measured sandbox result, and the owner's promotion decision
+  // describe what APEX might become rather than what happened. Capturing one would put a candidate
+  // self-change into the log the pattern and adaptation reads draw from, so a proposal would start
+  // to count as an event and an idea would feed the loop that shapes behaviour.
+  // T-32 Step 3: perception records readings of the machine (CPU, memory, storage, process, and the
+  // workspace git state) and the Sentinel's push discipline over them. Capturing one would put host
+  // telemetry and notice bookkeeping into the log the pattern and adaptation reads draw from, so a
+  // CPU reading would start to count as evidence about behaviour.
+  perception: 'it records readings of the host and the workspace, or the Sentinel push discipline over them; an experience of one would put machine telemetry and notice bookkeeping into the log the pattern and adaptation reads draw from',
+  evolution: 'it records a proposed change to APEX\'s own behaviour, the measured sandbox result for it, or the owner\'s promotion decision; a candidate self-change is not an event that happened, and it must not enter the experience log the pattern and adaptation reads draw from',
+  // T-34 Step 3: acknowledging a briefing writes a checkpoint of what the stores held at that moment.
+  // Capturing it would put APEX's own reading of its state into the log the pattern and adaptation
+  // reads draw from, so "the owner read a briefing" would start to count as behavioural evidence.
+  briefing: 'it records a checkpoint of what the owning stores held when the owner read a briefing; an experience of one would put APEX\'s own reading of its state into the log the pattern and adaptation reads draw from',
+  // T-35 Step 2: handing work to another enrolled device is an owner act about where the work lives,
+  // not something APEX did. Capturing it would teach the pattern reads that "moved a tab" is behaviour
+  // worth generalising from.
+  presence: 'it records an owner act about where work should continue - an envelope, its digest, its claim or its revocation - rather than something APEX did; capture would make a device handoff look like behavioural evidence',
+  // T-36 Step 1: a cold-start bootstrap is the machine being read for the first time, not an act
+  // APEX chose. Every value it records is re-derivable by reading the machine again, and an
+  // experience of it would teach the pattern reads that "install and boot" is behavioural evidence.
+  system: 'it reads the machine and the repository for the first time and records what it found; every value it holds is re-derivable by reading them again, so an experience of it would say less than a fresh reading',
+  // T-37 Step 1 (2026-11-21): Track 2. The substrate is a deterministic simulation: its whole state is
+  // a function of its seed and its step count, and the ledger it writes already records every step.
+  // An experience of a step would copy a number that a replay reproduces exactly, and an experience
+  // of the bridge reset would record the state of a translator. Neither says anything about what APEX
+  // did to the owner's world, which is what the experience log is for.
+  neural: 'it advances a deterministic simulation whose entire state is a function of its seed and step count, and whose own ledger already records each step; an experience of one would copy a number that a replay reproduces exactly',
 });
 
 // Every capability that can reach an operation-end path without being captured. A capability that
 // appears in neither list is refused by autoCaptureDecision, but the coverage test fails first: a
 // new action has to be classified here or added to the subset on purpose.
 export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
+  // T-32 Step 3: perception. A reading is re-derivable only while the machine is in the same state,
+  // which is exactly why it belongs in its own ledger rather than in the experience log.
+  'briefing.acknowledge': 'briefing',
+  'presence.handoff.stage': 'presence',
+  'presence.handoff.claim': 'presence',
+  'presence.handoff.revoke': 'presence',
+  'perception.sense_host': 'perception',
+  'perception.state': 'perception',
+  'perception.dismiss_alert': 'perception',
+  'perception.revoke_suppression': 'perception',
+  // T-36 Step 1: the cold-start bootstrap and its status read.
+  'system.bootstrap': 'system',
+  'system.bootstrap_status': 'system',
+  'neural.step': 'neural',
+  'neural.read': 'neural',
+  'neural.bridge_reset': 'neural',
   'app.status': 'read',
   'app.capabilities': 'read',
   'calc.evaluate': 'read',
@@ -224,6 +289,9 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   'plan.resume': 'executive',
   'safety.lockdown': 'executive',
   'safety.release': 'executive',
+  // T-29 (2026-11-19): one cognitive run ends one operation whose real outcomes are the task
+  // records it created and ran, so it is classified with the executive commands that write those.
+  'cognition.run': 'executive',
   'recover': 'read',
   'task.plan': 'task',
   'task.run': 'task',
@@ -282,10 +350,87 @@ export const CAPTURE_EXCLUDED_CAPABILITIES = Object.freeze({
   // draw from, turning a design into behavioural evidence; a simulation is re-derivable from the
   // stored sheet and says nothing about what happened.
   'workshop.compose': 'workshop',
+  // T-33 Step 3: a verification is a check of the user's own sheet and a promotion is the user's own
+  // decision about it. Recording either as an experience would copy the design into the log the
+  // pattern and adaptation reads draw from, which is the same reason composition is excluded.
+  'workshop.verify': 'workshop',
+  'workshop.promote': 'workshop',
+  'evolution.propose': 'evolution',
+  'evolution.verify': 'evolution',
+  'evolution.promote': 'evolution',
+  'evolution.decide': 'evolution',
   'workshop.list': 'read',
   'workshop.get': 'read',
   'workshop.inspect': 'read',
   'workshop.simulate': 'read',
+  // T-38 Step 2: the file-backed Workshop. The two workspace reads are reads. The three sandbox
+  // writes are excluded for the reason the composed sheet is: they carry the user's own proposed
+  // content, and copying that into the experience log would turn a proposal into behavioural
+  // evidence the pattern and adaptation reads then draw from.
+  'workspace.inspect': 'read',
+  'workspace.read_file': 'read',
+  'workshop.stage_file': 'workshop',
+  'workshop.verify_file': 'workshop',
+  'workshop.promote_file': 'workshop',
+  // T-39 Step 1: the two writes that reach the live tree. They are excluded for a sharper reason
+  // than the sandbox writes had: what an apply puts in the workspace is the user's own file, and the
+  // experience log answers what APEX did. The apply ledger and the causal trace already record the
+  // digests; copying the file's content here would turn the owner's source into behavioural evidence.
+  'workshop.apply_file': 'workspace-write',
+  // T-41 Step 3: staging a proposal writes inside the sandbox and appends one lab event. It is
+  // classified `workshop` like the other sandbox writes: what it carries is the owner's own proposed
+  // content, and copying that into the experience log would turn a proposal into behavioural evidence.
+  'evolution.stage_to_workshop': 'workshop',
+  'workshop.rollback_file': 'workspace-write',
+  // T-40: the check is a read of those same files, so it is excluded as a read - its result is
+  // re-derivable at any moment and copying it into the experience log would say less than a fresh
+  // check. The two batch writes are excluded for the reason the single-file writes are.
+  'workshop.check_applied': 'read',
+  'workshop.apply_changeset': 'workspace-write',
+  'workshop.rollback_changeset': 'workspace-write',
+  // T-43 Package 1: the git executive. The status and the diff are reads - a status re-read a second
+  // later is the truth about a second later, and copying either into the experience log would record a
+  // stale answer as though it were a lesson. The two writes are excluded because the checkpoint ledger
+  // already holds the richer record: the label, the reason, the snapshot commit, the tree, the
+  // manifest and the restore history. A second copy in the experience log would be a summary of a
+  // record that is already complete.
+  'system.inspect_ports': 'read',
+  'system.inspect_processes': 'read',
+  'git.status_detailed': 'read',
+  'git.diff_inspect': 'read',
+  'git.checkpoint_create': 'git',
+  'git.checkpoint_restore': 'git',
+  // T-44 Package 1: the two reads that exist so a Standing Order can delegate them through the one
+  // execution path. Both re-derive their whole answer from stores that already exist, so an experience
+  // would say less than a fresh read and make every later read slower. The three ledger acts are
+  // `standing_order` for the same reason a checkpoint is `git`: `standing-orders.json` is the richer
+  // record - the title, the trigger, the cooldown, every run with its operation id - and a second copy in
+  // the experience log would be a summary of a record that is already complete.
+  'system.doctor': 'read',
+  'briefing.compile': 'read',
+  'standing_order.create': 'orders',
+  'standing_order.toggle': 'orders',
+  'standing_order.revoke': 'orders',
+  'standing_order.invoke': 'orders',
+  'standing_order.evaluate': 'read',
+  // T-44 Package 2: the agenda. The read is `read` for the usual reason. The three writes are `agenda`
+  // because `executive-agenda.json` is the richer record: it holds the title, the category, the priority,
+  // the due date, the status and the completion date, and a second copy in the experience log would be a
+  // thinner version of a row that already exists.
+  'agenda.list': 'read',
+  'agenda.create': 'agenda',
+  'agenda.complete': 'agenda',
+  'agenda.dismiss': 'agenda',
+  // T-45 Packages 1 and 2. The two catalog reads are `read` for the usual reason. The launch and the four
+  // watchpoint writes are excluded because their ledgers already hold the full record.
+  'playbook.catalog': 'read',
+  'playbook.read': 'read',
+  'playbook.launch': 'playbooks',
+  'watchpoint.list': 'read',
+  'watchpoint.create': 'watchpoints',
+  'watchpoint.toggle': 'watchpoints',
+  'watchpoint.delete': 'watchpoints',
+  'watchpoint.evaluate': 'watchpoints',
   none: 'no-action',
 });
 

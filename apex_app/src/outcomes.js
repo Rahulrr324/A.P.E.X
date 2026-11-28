@@ -30,6 +30,17 @@ export const Outcome = Object.freeze({
   PROPOSAL_DECIDED: 'proposal_decided', // the user accepted, rejected, or invalidated a proposal
   TASK_PAUSED: 'task_paused', // stopped for an explicit user decision
   TASK_CANCELLED: 'task_cancelled',
+  // T-31 Step 2: the Evolution Lab's own vocabulary. Each records what the ledger now holds, and
+  // none of them claims that anything was applied: a proposal authorizes nothing, a verification is
+  // a measurement, and a promotion decision is a record rather than an execution.
+  EVOLUTION_PROPOSAL_RECORDED: 'evolution_proposal_recorded',
+  EVOLUTION_VERIFICATION_RECORDED: 'evolution_verification_recorded',
+  EVOLUTION_PROMOTION_REQUESTED: 'evolution_promotion_requested',
+  EVOLUTION_PROMOTION_APPROVED: 'evolution_promotion_approved',
+  EVOLUTION_PROMOTION_REJECTED: 'evolution_promotion_rejected',
+  // T-41 Step 3: a proposal was staged into the Workshop as a candidate. Staging is not verification
+  // and not an apply, and the name says so.
+  EVOLUTION_STAGED_TO_WORKSHOP: 'evolution_staged_to_workshop',
 });
 
 export const OUTCOME_VALUES = new Set(Object.values(Outcome));

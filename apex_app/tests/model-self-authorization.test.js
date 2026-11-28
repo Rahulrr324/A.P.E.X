@@ -68,7 +68,7 @@ const readJsonl = (file) => (fs.existsSync(file)
 
 const STORE_FILES = ['memory.jsonl', 'conversation.jsonl', 'operations.jsonl', 'session.json',
   'tasks.jsonl', 'task-summary-queue.json', 'knowledge.jsonl', 'experiences.jsonl', 'predictions.jsonl',
-  'world-model.jsonl'];
+  'world-model.jsonl', 'workshop.jsonl'];
 function sizes(dir) {
   return Object.fromEntries(STORE_FILES.map((f) => {
     const p = path.join(dir, f);
@@ -93,6 +93,8 @@ const MODEL_WRITE_ATTEMPTS = [
   ['knowledge.add', { subject: 'gate', relationship: 'opens', object: 'on time' }],
   ['knowledge.retract', { target: 'no-such-claim', reason: 'the model decided' }],
   ['knowledge.resolve', { target: 'no-such-conflict', choose: 'no-such-record' }],
+  // T-29 (2026-11-19): a reply may not start a cognitive run, which can create and run a task.
+  ['cognition.run', { intent: 'the model asked for this' }],
   // Batch T-08: outcome learning judges APEX's own behaviour, so a reply may not evaluate, propose,
   // measure, or roll back anything.
   ['learning.observe', { operationId: 'op1' }],
@@ -121,6 +123,14 @@ const MODEL_WRITE_ATTEMPTS = [
   // Neither may be produced or applied by a reply.
   ['backup.export', { path: 'model-archive.json' }],
   ['backup.restore', { path: 'model-archive.json', confirm: '00000000', replaceExisting: true }],
+  // T-34 Step 3: acknowledging a briefing writes the checkpoint the next briefing is measured
+  // against, so it is the owner's own act and a reply cannot record it on their behalf.
+  ['briefing.acknowledge', { reason: 'the model acknowledged the briefing' }],
+  // T-35 Step 2: an envelope says where the owner's work continues and on which of the owner's own
+  // devices. Staging, claiming and revoking one are the owner's acts; a reply may do none of them.
+  ['presence.handoff.stage', { sourceDeviceId: 'device-t35-a', targetDeviceId: 'device-t35-b', targetView: 'deck' }],
+  ['presence.handoff.claim', { handoffId: 'ph-000000000000', targetDeviceId: 'device-t35-b' }],
+  ['presence.handoff.revoke', { handoffId: 'ph-000000000000', reason: 'the model revoked it' }],
   ['prediction.record', { capability: 'memory.add', expectation: 'success', subject: 'the model expects success', inDays: 7 }],
   ['prediction.evaluate', { target: 'no-such-prediction' }],
   ['prediction.invalidate', { target: 'no-such-prediction', reason: 'the model withdrew it' }],
@@ -181,6 +191,76 @@ const MODEL_WRITE_ATTEMPTS = [
   ['world.statement.retract', { targetType: 'fact', target: 'f-model', reason: 'the model withdrew it' }],
   ['world.statement.supersede', { targetType: 'fact', target: 'f-model', by: 'f-other', reason: 'the model replaced it' }],
   ['world.identity.decide', { left: 'e-model', right: 'e-other', decision: 'confirmed', reason: 'the model decided' }],
+  // T-30 (2026-11-19): Workshop composition is user-only even though it is not a belief-store write.
+  ['workshop.compose', {}],
+  // T-33 Step 3 (2026-11-19): so are the sandbox verification and the promotion. A model may read the
+  // design and its verification; it may not record a check or accept a design on the owner's behalf.
+  ['workshop.verify', { artifactId: 'ws-model-attempt', reason: 'the model ran the check' }],
+  ['workshop.promote', { artifactId: 'ws-model-attempt', reason: 'the model accepted it' }],
+  // [T-38 Step 2, 2026-11-21] The file-backed sandbox. A model may read the workspace, but it may not
+  // stage content, record a parse result, or promote a candidate - a model that could do all three
+  // could manufacture a passing verification for content of its own choosing and then cite it.
+  ['workshop.stage_file', { relativePath: 'model.js', proposedContent: 'export const model = 1;\n', rationale: 'the model staged it' }],
+  ['workshop.verify_file', { candidateId: 'wsc-000000000000' }],
+  ['workshop.promote_file', { candidateId: 'wsc-000000000000', reason: 'the model promoted it' }],
+  // [T-39 Step 1, 2026-11-22] The two writes that reach the owner's live tree. A model that could
+  // apply could write a file the owner never chose, and a model that could roll back could undo a
+  // change the owner accepted. These are the strongest refusals in the table.
+  ['workshop.apply_file', { candidateId: 'wsc-000000000000', reason: 'the model applied it' }],
+  ['workshop.rollback_file', { applyId: 'wsa-000000000000', reason: 'the model rolled it back' }],
+  // T-40 Step 2: the batch writes. A model that could name a changeset could write many files in one
+  // act, so they are swept here on the day they are registered like every other write.
+  ['workshop.apply_changeset', { candidateIds: ['wsc-000000000000', 'wsc-111111111111'], title: 'the model applied it', rationale: 'the model decided this' }],
+  ['workshop.rollback_changeset', { changesetId: 'wcs-000000000000', reason: 'the model rolled it back' }],
+  // [T-31 Step 2, 2026-11-19] The Evolution Lab's four writes. A model may not propose a change to
+  // APEX's own behaviour, record a sandbox result, request a promotion, or decide one.
+  ['evolution.propose', { title: 'the model proposed this' }],
+  ['evolution.verify', { proposalId: 'evo-modelattempt', verified: true, detail: 'the model said it passed' }],
+  ['evolution.promote', { proposalId: 'evo-modelattempt', reason: 'the model asked for it' }],
+  ['evolution.decide', { proposalId: 'evo-modelattempt', decision: 'approved', reason: 'the model approved it' }],
+  // T-41 Step 3 (2026-11-22): the bridge to the Workshop. A model that could stage a proposal could
+  // put its own bytes where the applier reads, leaving the immutable boundary as the only thing
+  // between it and the owner's tree - so it is swept here like every other write.
+  ['evolution.stage_to_workshop', { proposalId: 'evo-modelattempt' }],
+  // T-32 Step 3: perception. A reading of the host, a dismissal of a notice class, and the revocation
+  // of a suppression rule are all owner acts; a model may read the ledger (`perception.state`) and
+  // may not take any of these three.
+  ['perception.sense_host', { reason: 'the model asked for a host reading' }],
+  ['perception.dismiss_alert', { alertClass: 'storage_pressure' }],
+  ['perception.revoke_suppression', { ruleId: 'rule-1' }],
+  // T-36 Step 1 (2026-11-21): the cold-start bootstrap reads the machine, enrols the workstation
+  // and writes the marker. It is the owner's own first launch, so a reply may not trigger it.
+  ['system.bootstrap', { reason: 'the model asked for a cold start' }],
+  // [T-37 Step 1, 2026-11-21] A model may not step the substrate: if it could, it could manufacture
+  // the candidate associations it is then asked to weigh. Nor may it close a breaker the bridge
+  // opened on itself - an isolation is the bridge declining to translate, and only the owner may
+  // decide that it should try again.
+  ['neural.step', { steps: 8 }],
+  ['neural.bridge_reset', { reason: 'the model asked to reopen the bridge' }],
+  // [T-44 Package 1, 2026-11-19] A standing order is a standing permission, and the one thing a reply
+  // must never do is grant itself one. If a model could create an order it could name a capability it is
+  // itself denied and have the engine run it on the next event - self-authorization with an alibi. The
+  // same goes for every other act on the order ledger, and for asking an existing order to run now.
+  ['standing_order.create', { title: 'the model asked to delegate', eventType: 'session_start', capabilityId: 'system.doctor' }],
+  ['standing_order.toggle', { orderId: 'so_probe' }],
+  ['standing_order.revoke', { orderId: 'so_probe' }],
+  ['standing_order.invoke', { orderId: 'so_probe' }],
+  // [T-44 Package 2, 2026-11-19] A commitment is the owner's own statement of intent. A reply that could
+  // write one could put words in the owner's mouth about what they have undertaken to do, so all three
+  // agenda writes are refused at model origin. `agenda.list` is deliberately not here: it is a read.
+  ['agenda.create', { title: 'the model scheduled something' }],
+  ['agenda.complete', { itemId: 'ag_probe' }],
+  ['agenda.dismiss', { itemId: 'ag_probe' }],
+  // [T-45 Packages 1 and 2, 2026-11-19] A routine and a threshold are the owner's own standing
+  // instructions. A reply that could launch a playbook could run three capabilities without anyone
+  // asking, and one that could set a threshold could decide what counts as a problem. All five writes
+  // are refused at model origin. The three reads (`playbook.catalog`, `playbook.read`, `watchpoint.list`)
+  // are deliberately not here: they are reads.
+  ['playbook.launch', { playbookId: 'morning_briefing' }],
+  ['watchpoint.create', { title: 'the model set a threshold', metric: 'apex_rss_mb', threshold: 1 }],
+  ['watchpoint.toggle', { watchpointId: 'wp_probe', enabled: false }],
+  ['watchpoint.delete', { watchpointId: 'wp_probe' }],
+  ['watchpoint.evaluate', {}],
 ];
 
 // One experience of one real audited event, written through the user-facing controller path.

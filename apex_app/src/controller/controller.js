@@ -352,6 +352,23 @@ const AUDIT_TEXT_FIELDS = Object.freeze({
   // A note's body is the content the user composed, and the note log itself holds it. The audit
   // records the title, tags, sensitivity, and cited sources, and omits the body so personal text is
   // not duplicated into the operation log. A revision names the record it replaces.
+  // T-31 Step 3: the step-up proof is a credential. It is omitted from the audit input entirely,
+  // like a note body, so the operation log records that a release happened and how long the proof
+  // was, never the proof itself.
+  'safety.release': Object.freeze({
+    allowed: ['reason', 'stepUp'],
+    text: ['reason'],
+    arrays: [],
+    objects: [],
+    omit: ['stepUp'],
+  }),
+  'evolution.decide': Object.freeze({
+    allowed: ['proposalId', 'decision', 'reason', 'stepUp'],
+    text: ['reason'],
+    arrays: [],
+    objects: [],
+    omit: ['stepUp'],
+  }),
   'note.add': Object.freeze({
     allowed: ['title', 'body', 'tags', 'sources', 'sensitivity'],
     text: ['title', 'sensitivity'],
@@ -596,8 +613,18 @@ export class CognitiveController {
     reasoning = null,
     dataDir = null,
     neural = null,
+    // T-37 Step 1: the live Track 2 service. `neural` above stays the *boundary* declaration (what a
+    // transport would be); `neuralService` is the substrate the capabilities actually step. Keeping
+    // them separate is deliberate: the boundary is a contract, the service is state.
+    neuralService = null,
     council = null,
     workshop = null,
+    // T-38 Step 2: the file-backed Workshop sandbox. Optional, like every other service here: a
+    // controller built without one simply has no file-backed capabilities, and the actions that need
+    // it throw WORKSHOP_SANDBOX_UNAVAILABLE rather than pretending to read a workspace.
+    workshopSandbox = null,
+    workshopApplier = null,
+    evolution = null,
   }) {
     this.memory = memory;
     this.operations = operations;
@@ -667,6 +694,14 @@ export class CognitiveController {
     // The workshop store holds design sheets the user composed. Reading and simulating one is a
     // read; composing is a user write. Neither path executes the design.
     this.workshop = workshop;
+    this.workshopSandbox = workshopSandbox;
+    // T-39 Step 1: the applier, so `workshop.apply_file` and `workshop.rollback_file` reach the one
+    // ledger the UI routes read. Null leaves both actions refusing with WORKSHOP_SANDBOX_UNAVAILABLE.
+    this.workshopApplier = workshopApplier;
+    // The Evolution Lab holds the record of candidate self-changes: proposals, the measured sandbox
+    // result for each, and promotion requests and decisions. Holding it here lets the read surfaces
+    // report it and lets the action context append to it; the ECP still authorizes every append.
+    this.evolution = evolution;
     // The data directory the backup commands read and replace. The actions close over it at
     // composition time; this field only decides whether the commands are available at all.
     this.dataDir = dataDir;
@@ -674,6 +709,7 @@ export class CognitiveController {
     // by the application, and even when one is injected for a test, an action sees only the plain
     // declaration. It is held here so `neural.contract` can report it.
     this.neural = neural;
+    this.neuralService = neuralService;
     this.tasks = taskStore
       ? new TaskRunner({
           store: taskStore,
@@ -1508,6 +1544,353 @@ export class CognitiveController {
     const op = this.#newOp({ capability: 'workshop.compose', origin: 'user', request });
     const input = { title: safe, domain, components, connections, budget, note };
     const step = await this.runAction('workshop.compose', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // T-33 Step 3: the sandbox verification and the promotion. Both are user writes that run through
+  // runAction, so the ECP authorizes them, the verifier reads the ledger back, and a refusal is
+  // recorded rather than swallowed. Neither applies anything.
+  async workshopVerify({ artifactId, reason = null } = {}) {
+    const shown = typeof artifactId === 'string' ? truncate(artifactId, 40) : '[missing artifact]';
+    const op = this.#newOp({ capability: 'workshop.verify', origin: 'user', request: `workshop verify [${shown}]` });
+    const step = await this.runAction('workshop.verify', { artifactId, reason }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workshopPromote({ artifactId, reason = null } = {}) {
+    const shown = typeof artifactId === 'string' ? truncate(artifactId, 40) : '[missing artifact]';
+    const stated = typeof reason === 'string' && reason.trim() !== '' ? truncate(reason.trim(), 60) : '[missing reason]';
+    const op = this.#newOp({ capability: 'workshop.promote', origin: 'user', request: `workshop promote [${shown}] ${stated}` });
+    const step = await this.runAction('workshop.promote', { artifactId, reason }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // ---- T-38 file-backed workshop -------------------------------------------------
+  // Each of these runs the capability through `runAction`, so the registry authorizes, the ECP
+  // decides and the verifier reads the record back - the same path every other capability takes. A
+  // command method is a request shape, never an authorization.
+  async workshopInspect({ maxEntries = 400 } = {}) {
+    const op = this.#newOp({ capability: 'workspace.inspect', origin: 'user', request: 'workshop inspect workspace' });
+    const step = await this.runAction('workspace.inspect', { maxEntries }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workshopReadFile({ path: filePath, startLine = 1, lines = 80 } = {}) {
+    const shown = typeof filePath === 'string' ? truncate(filePath, 60) : '[missing path]';
+    const op = this.#newOp({ capability: 'workspace.read_file', origin: 'user', request: `workshop read [${shown}]` });
+    const step = await this.runAction('workspace.read_file', { path: filePath, startLine, lines }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workshopStageFile({ relativePath, proposedContent, rationale = null, testContent = null } = {}) {
+    const shown = typeof relativePath === 'string' ? truncate(relativePath, 60) : '[missing path]';
+    const op = this.#newOp({ capability: 'workshop.stage_file', origin: 'user', request: `workshop stage [${shown}]` });
+    const step = await this.runAction('workshop.stage_file', { relativePath, proposedContent, rationale, testContent }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workshopVerifyFile({ candidateId } = {}) {
+    const shown = typeof candidateId === 'string' ? truncate(candidateId, 40) : '[missing candidate]';
+    const op = this.#newOp({ capability: 'workshop.verify_file', origin: 'user', request: `workshop verify file [${shown}]` });
+    const step = await this.runAction('workshop.verify_file', { candidateId }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workshopPromoteFile({ candidateId, reason = null } = {}) {
+    const shown = typeof candidateId === 'string' ? truncate(candidateId, 40) : '[missing candidate]';
+    const op = this.#newOp({ capability: 'workshop.promote_file', origin: 'user', request: `workshop promote file [${shown}]` });
+    const step = await this.runAction('workshop.promote_file', { candidateId, reason }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // T-39 Step 1: the two governed writes into the live workspace. Each one runs the registered
+  // capability through runAction, so the ECP authorizes it (and refuses in lockdown, or from a model
+  // origin) and the verifier re-reads the result. Nothing reaches the applier before that.
+  async workshopApplyFile({ candidateId, reason = null, stepUp = null } = {}) {
+    const shown = typeof candidateId === 'string' ? truncate(candidateId, 40) : '[missing candidate]';
+    const op = this.#newOp({ capability: 'workshop.apply_file', origin: 'user', request: `workshop apply file [${shown}]` });
+    const step = await this.runAction('workshop.apply_file', { candidateId, reason, stepUp }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // T-40 Step 1: the live disk check. A read through the governed capability, so the ECP authorizes
+  // it like any other and the result is verified by an independent second read.
+  async workshopCheckApplied() {
+    const op = this.#newOp({ capability: 'workshop.check_applied', origin: 'user', request: 'workshop check applied files' });
+    const step = await this.runAction('workshop.check_applied', {}, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // T-40 Step 2: the batch writes. Both go through runAction, so the ECP decides before the applier is
+  // reached and the verifier re-reads every file afterwards.
+  async workshopApplyChangeset({ candidateIds, title, rationale = null, stepUp = null } = {}) {
+    const count = Array.isArray(candidateIds) ? candidateIds.length : 0;
+    const op = this.#newOp({ capability: 'workshop.apply_changeset', origin: 'user', request: `workshop apply changeset [${count} file(s)]` });
+    const step = await this.runAction('workshop.apply_changeset', { candidateIds, title, rationale, stepUp }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workshopRollbackChangeset({ changesetId, reason = null, stepUp = null } = {}) {
+    const shown = typeof changesetId === 'string' ? truncate(changesetId, 40) : '[missing changeset]';
+    const op = this.#newOp({ capability: 'workshop.rollback_changeset', origin: 'user', request: `workshop rollback changeset [${shown}]` });
+    const step = await this.runAction('workshop.rollback_changeset', { changesetId, reason, stepUp }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async workshopRollbackFile({ applyId, reason = null, stepUp = null } = {}) {
+    const shown = typeof applyId === 'string' ? truncate(applyId, 40) : '[missing apply]';
+    const op = this.#newOp({ capability: 'workshop.rollback_file', origin: 'user', request: `workshop rollback file [${shown}]` });
+    const step = await this.runAction('workshop.rollback_file', { applyId, reason, stepUp }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // T-43 Package 1: the two governed git writes and the two reads. The writes go through runAction
+  // like every other write in APEX, so the ECP authorizes them, Lockdown refuses them with
+  // KILL_SWITCH_ACTIVE, and the verifier re-reads the repository afterwards. Nothing in the route
+  // reaches the git engine before that.
+  async gitCheckpointCreate({ label, reason = null, stepUp = null } = {}) {
+    // The label travels into the request line; a label with control characters in it would produce an
+    // audit line no reader can parse, so it is truncated here exactly as a candidate id is.
+    const shown = typeof label === 'string' ? truncate(label, 60) : '[missing label]';
+    const op = this.#newOp({ capability: 'git.checkpoint_create', origin: 'user', request: `git checkpoint create [${shown}]` });
+    const step = await this.runAction('git.checkpoint_create', { label, reason, stepUp }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async gitCheckpointRestore({ checkpointId, reason = null, stepUp = null } = {}) {
+    const shown = typeof checkpointId === 'string' ? truncate(checkpointId, 40) : '[missing checkpoint]';
+    const op = this.#newOp({ capability: 'git.checkpoint_restore', origin: 'user', request: `git checkpoint restore [${shown}]` });
+    const step = await this.runAction('git.checkpoint_restore', { checkpointId, reason, stepUp }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // T-44 Package 1: a standing-order run as a real operation. The engine asks for this rather than
+  // calling runAction directly, so every run leaves a full record in `operations.jsonl` - the
+  // authorization decision, the capability's own validation, its execution and its verification - which
+  // is what makes an automatic act as auditable as a pressed button. The order and run ids travel into
+  // the request line so the trace can reach this record from either id.
+  async standingOrderRun({ orderId, runId = null, capabilityId, input = {}, autonomyTier = 'L3', triggeredBy = 'manual_invoke' } = {}) {
+    const order = typeof orderId === 'string' ? truncate(orderId, 40) : '[missing order]';
+    const capability = typeof capabilityId === 'string' ? truncate(capabilityId, 80) : '[missing capability]';
+    const op = this.#newOp({
+      capability,
+      origin: 'user',
+      request: `standing order ${order} ${runId ? truncate(runId, 40) : ''} -> ${capability} (${autonomyTier}, ${triggeredBy})`.replace(/\s+/g, ' ').trim(),
+    });
+    const step = await this.runAction(capability, input, 'user', op.id);
+    const finished = await this.#finishCommandOp(op, step, null);
+    return { ...finished, step };
+  }
+
+  // T-45 Package 1: one step of a playbook. It is the same three lines as a standing-order run - make an
+  // operation, run the capability inside it, finalize it - and it exists separately because a playbook has
+  // three steps and each one deserves its own receipt. A run recorded as one operation for three
+  // capability calls would put a receipt in the ledger for work that was three separate acts.
+  async playbookStep({ runId = null, stepId, capabilityId, input = {}, autonomyTier = 'L2' } = {}) {
+    const run = typeof runId === 'string' ? truncate(runId, 40) : '[missing run]';
+    const step = typeof stepId === 'string' ? truncate(stepId, 40) : '[missing step]';
+    const capability = typeof capabilityId === 'string' ? truncate(capabilityId, 80) : '[missing capability]';
+    const op = this.#newOp({
+      capability,
+      origin: 'user',
+      request: `playbook ${run} ${step} -> ${capability} (${autonomyTier})`.replace(/\s+/g, ' ').trim(),
+    });
+    const finished = await this.runAction(capability, input, 'user', op.id);
+    const record = await this.#finishCommandOp(op, finished, null);
+    return { ...record, step: finished, operationId: op.id };
+  }
+
+  // The four order-ledger writes get the same treatment, so creating or revoking an order is a record in
+  // the same ledger as the runs it will perform.
+  async standingOrderLedgerAct({ action, input = {} } = {}) {
+    const op = this.#newOp({
+      capability: action,
+      origin: 'user',
+      request: `${action} ${typeof input.orderId === 'string' ? truncate(input.orderId, 40) : (typeof input.title === 'string' ? truncate(input.title, 60) : '')}`.trim(),
+    });
+    const step = await this.runAction(action, input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async gitStatusDetailed() {
+    const op = this.#newOp({ capability: 'git.status_detailed', origin: 'user', request: 'git status detailed' });
+    const step = await this.runAction('git.status_detailed', {}, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async gitDiffInspect({ targetPath = null, baseRef = 'HEAD', staged = false, maxBytes = null } = {}) {
+    const op = this.#newOp({ capability: 'git.diff_inspect', origin: 'user', request: 'git diff inspect' });
+    const input = { targetPath, baseRef, staged };
+    if (maxBytes !== null) input.maxBytes = maxBytes;
+    const step = await this.runAction('git.diff_inspect', input, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // ---- T-31 evolution lab -------------------------------------------------------
+  // Four audited acts. Each one runs the registered capability through runAction, so the ECP
+  // authorizes it, the verifier checks the ledger afterwards, and a refusal is recorded rather
+  // than swallowed. Nothing here executes a proposal: the lab only appends records.
+  async evolutionPropose({ title, hypothesis = null, evidence = [], targetRelativePath = null, proposedContent = null, testContent = null } = {}) {
+    const safe = typeof title === 'string' ? title.trim() : '';
+    const request = safe === ''
+      ? 'evolution propose'
+      : containsSecret(safe)
+        ? 'evolution propose [title omitted: contained a password, key, or token]'
+        : `evolution propose [${truncate(safe, 120)}]`;
+    return this.#executiveMutation({
+      capability: 'evolution.propose',
+      request,
+      action: 'evolution.propose',
+      // T-41 Step 3: the target and the bytes travel with the proposal when they were given. They are
+      // omitted rather than sent as nulls otherwise, so an older shape of the request is unchanged.
+      input: {
+        title: safe,
+        hypothesis,
+        evidence,
+        ...(targetRelativePath === null ? {} : { targetRelativePath }),
+        ...(proposedContent === null ? {} : { proposedContent }),
+        ...(testContent === null ? {} : { testContent }),
+      },
+      failMessage: 'The proposal may have been recorded, but its audit record could not be written.',
+      status: Outcome.EVOLUTION_PROPOSAL_RECORDED,
+    });
+  }
+
+  async evolutionVerify({ proposalId, verified, detail = null } = {}) {
+    return this.#executiveMutation({
+      capability: 'evolution.verify',
+      request: `evolution verify [${truncate(String(proposalId ?? ''), 40)}] ${verified === true ? 'passed' : 'failed'}`,
+      action: 'evolution.verify',
+      input: { proposalId, verified, detail },
+      failMessage: 'The sandbox result may have been recorded, but its audit record could not be written.',
+      status: Outcome.EVOLUTION_VERIFICATION_RECORDED,
+    });
+  }
+
+  async evolutionPromote({ proposalId, reason } = {}) {
+    const shown = typeof reason === 'string' && reason.trim() !== '' ? truncate(reason.trim(), 60) : '[missing reason]';
+    return this.#executiveMutation({
+      capability: 'evolution.promote',
+      request: `evolution promote [${truncate(String(proposalId ?? ''), 40)}] [${shown}]`,
+      action: 'evolution.promote',
+      input: { proposalId, reason },
+      failMessage: 'The promotion request may have been recorded, but its audit record could not be written.',
+      status: Outcome.EVOLUTION_PROMOTION_REQUESTED,
+    });
+  }
+
+  async evolutionDecide({ proposalId, decision, reason = null, stepUp = null } = {}) {
+    return this.#executiveMutation({
+      capability: 'evolution.decide',
+      request: `evolution decide [${truncate(String(proposalId ?? ''), 40)}] ${truncate(String(decision ?? ''), 20)}`,
+      action: 'evolution.decide',
+      input: stepUp === null ? { proposalId, decision, reason } : { proposalId, decision, reason, stepUp },
+      failMessage: 'The decision may have been recorded, but its audit record could not be written.',
+      status: decision === 'approved' ? Outcome.EVOLUTION_PROMOTION_APPROVED : Outcome.EVOLUTION_PROMOTION_REJECTED,
+    });
+  }
+
+  // T-41 Step 3 (2026-11-22): the bridge from an evolution proposal to a Workshop candidate. It runs
+  // through the same governed mutation path as every other evolution act, so the ECP authorizes it and
+  // the audit log holds the request even when the immutable boundary refuses it.
+  async evolutionStageToWorkshop({ proposalId } = {}) {
+    return this.#executiveMutation({
+      capability: 'evolution.stage_to_workshop',
+      request: `evolution stage to workshop [${truncate(String(proposalId ?? ''), 40)}]`,
+      action: 'evolution.stage_to_workshop',
+      input: { proposalId },
+      failMessage: 'The candidate may have been staged, but its audit record could not be written.',
+      status: Outcome.EVOLUTION_STAGED_TO_WORKSHOP,
+    });
+  }
+
+  // ---- T-29 cognition pipeline -------------------------------------------------
+  // One owner intent, one governed run. The capability is registered like any other, so the
+  // operation audit, ECP authorization and verifier all apply; the pipeline itself halts
+  // fail-closed and never executes a gated step without the owner's own approval.
+  // T-34 Step 3: acknowledging a briefing writes a checkpoint of what the owning stores hold. It is a
+  // governed write like any other: the ECP authorizes it, the lockdown latch refuses it, and the
+  // action verifies the line it claims to have written.
+  // T-35 Step 2: the presence handoff envelopes. Each of the three is a governed write with its own
+  // operation, so the audit log holds the request and the refusal as well as the success. The
+  // controller carries the fields; the envelope's checks (trust, digest, expiry, one claim) are the
+  // service's, and the verifier re-reads the ledger rather than trusting this return value.
+  async presenceHandoffStage(fields = {}) {
+    const shown = typeof fields.targetDeviceId === 'string' ? truncate(fields.targetDeviceId, 48) : '[missing device]';
+    const op = this.#newOp({ capability: 'presence.handoff.stage', origin: 'user', request: `stage a presence handoff for ${shown}` });
+    const payload = {};
+    for (const key of ['sourceDeviceId', 'targetDeviceId', 'targetView', 'taskId', 'briefingCheckpointId', 'artifactId', 'note']) {
+      if (fields[key] !== undefined && fields[key] !== null) payload[key] = fields[key];
+    }
+    const step = await this.runAction('presence.handoff.stage', payload, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async presenceHandoffClaim({ handoffId, targetDeviceId } = {}) {
+    const op = this.#newOp({ capability: 'presence.handoff.claim', origin: 'user', request: `claim presence handoff ${truncate(String(handoffId ?? '[missing]'), 48)}` });
+    const step = await this.runAction('presence.handoff.claim', { handoffId, targetDeviceId }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async presenceHandoffRevoke({ handoffId, reason } = {}) {
+    const op = this.#newOp({ capability: 'presence.handoff.revoke', origin: 'user', request: `revoke presence handoff ${truncate(String(handoffId ?? '[missing]'), 48)}` });
+    const step = await this.runAction('presence.handoff.revoke', { reason, handoffId }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async briefingAcknowledge({ reason = null } = {}) {
+    const op = this.#newOp({ capability: 'briefing.acknowledge', origin: 'user', request: 'acknowledge the briefing' });
+    const payload = reason === null || reason === undefined ? {} : { reason };
+    const step = await this.runAction('briefing.acknowledge', payload, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // T-34 Step 1: a mission is named explicitly, and the mission compiler - not this method - decides
+  // what its steps are. The controller only carries the name and the artifact through.
+  async cognitionRun({ intent, action = null, input = null, councilRequested = false, mission = null, artifactId = null } = {}) {
+    const shown = typeof intent === 'string' && intent.trim() !== '' ? truncate(intent.trim(), 80) : '[missing intent]';
+    const op = this.#newOp({ capability: 'cognition.run', origin: 'user', request: `cognition run [${shown}]${mission ? ` [mission ${mission}]` : ''}` });
+    const payload = { intent };
+    if (action !== null && action !== undefined) payload.action = action;
+    if (input !== null && input !== undefined) payload.input = input;
+    if (councilRequested === true) payload.councilRequested = true;
+    if (mission !== null && mission !== undefined) payload.mission = mission;
+    if (artifactId !== null && artifactId !== undefined) payload.artifactId = artifactId;
+    const step = await this.runAction('cognition.run', payload, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // T-32 Step 3: perception. The sense is a read the ECP authorizes like any other capability; the
+  // dismiss and the revoke are owner writes that record the Sentinel's push discipline in the audit
+  // log as well as in the perception ledger.
+  async perceptionSense({ reason = null } = {}) {
+    const op = this.#newOp({ capability: 'perception.sense_host', origin: 'user', request: 'host and workspace reading' });
+    const payload = reason === null || reason === undefined ? {} : { reason };
+    const step = await this.runAction('perception.sense_host', payload, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async perceptionDismissAlert({ alertClass } = {}) {
+    const shown = typeof alertClass === 'string' && alertClass.trim() !== '' ? truncate(alertClass.trim(), 40) : '[missing class]';
+    const op = this.#newOp({ capability: 'perception.dismiss_alert', origin: 'user', request: `dismiss ${shown}` });
+    const step = await this.runAction('perception.dismiss_alert', { alertClass }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  async perceptionRevokeSuppression({ ruleId } = {}) {
+    const shown = typeof ruleId === 'string' && ruleId.trim() !== '' ? truncate(ruleId.trim(), 40) : '[missing rule]';
+    const op = this.#newOp({ capability: 'perception.revoke_suppression', origin: 'user', request: `revoke ${shown}` });
+    const step = await this.runAction('perception.revoke_suppression', { ruleId }, 'user', op.id);
+    return this.#finishCommandOp(op, step, null);
+  }
+
+  // T-36 Step 1: the cold-start bootstrap. It is a governed write like every other one: the
+  // registry authorizes it, the control plane refuses it under lockdown, and the operation is
+  // audited. The service it calls does the reading; this only decides that the act is the owner's.
+  async systemBootstrap({ reason = null } = {}) {
+    const op = this.#newOp({ capability: 'system.bootstrap', origin: 'user', request: 'workstation bootstrap' });
+    const payload = reason === null || reason === undefined ? {} : { reason };
+    const step = await this.runAction('system.bootstrap', payload, 'user', op.id);
     return this.#finishCommandOp(op, step, null);
   }
 
@@ -3140,8 +3523,18 @@ export class CognitiveController {
       // transport is connected. Inspecting it contacts nothing; the simulated transport is
       // reported as available to tests, never as an integrated runtime.
       neuralContract: describeNeuralBoundary(this.neural),
+      // T-37 Step 1: the Track 2 substrate service, so `neural.step` and `neural.read` reach the one
+      // simulation the deck also reads. It carries no authorization: the registry decides above.
+      neural: this.neuralService,
       council: this.council,
       workshop: this.workshop,
+      // T-38 Step 2: the file-backed Workshop. Reaching it is a read of the configured workspace and a
+      // write inside the APEX data directory's sandbox; the registry authorizes above, as always.
+      workshopSandbox: this.workshopSandbox,
+      // T-39 Step 1: the one writer into the live tree. The registry authorizes above, and the ECP has
+      // already refused a lockdown or a model origin by the time execute is reached.
+      workshopApplier: this.workshopApplier,
+      evolution: this.evolution,
     };
   }
 
@@ -3503,12 +3896,12 @@ export class CognitiveController {
     });
   }
 
-  async safetyRelease({ reason } = {}) {
+  async safetyRelease({ reason, stepUp = null } = {}) {
     return this.#executiveMutation({
       capability: 'safety.release',
       request: 'safety release',
       action: 'safety.release',
-      input: { reason },
+      input: stepUp === null ? { reason } : { reason, stepUp },
       failMessage: 'The emergency-stop state may have changed; inspect ECP safety status before retrying.',
       status: Outcome.SUCCESS_VERIFIED,
     });

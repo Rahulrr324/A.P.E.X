@@ -39,7 +39,9 @@ function appWith(dir, filesystemRoot = null) {
 const STORE_FILES = ['memory.jsonl', 'conversation.jsonl', 'operations.jsonl', 'session.json',
   'tasks.jsonl', 'task-summary-queue.json', 'knowledge.jsonl', 'experiences.jsonl', 'predictions.jsonl',
   // Batch AL added a goal store and a plan store; a classified read must leave them untouched too.
-  'goals.jsonl', 'plans.jsonl'];
+  'goals.jsonl', 'plans.jsonl',
+  // T-30 (2026-11-19): Workshop reads must leave the append-only design log untouched.
+  'workshop.jsonl'];
 function sizes(dir) {
   return Object.fromEntries(STORE_FILES.map((f) => {
     const p = path.join(dir, f);
@@ -107,16 +109,68 @@ function inventoryRows() {
 describe('AF-19: the registry is the inventory', () => {
   test('the registered action set is what the inventory names, with and without a filesystem root', () => {
     const plain = appWith(tempDir());
-    // T-25: 5 council read actions added (deliberate, list, get, replay, compare).
-    assert.equal(plain.registry.list().length, 134, 'the default registry has 134 actions');
+    // T-25 added Council's five reads; T-26/T-27 added four Workshop reads and one user-only
+    // compose action. T-29 (2026-11-19) adds one owner-only capability, `cognition.run`, and the
+    // historical 134/139 expectations are superseded with it.
+    // T-31 Step 2 (2026-11-19) added four evolution-lab capabilities (propose, verify, promote, decide),
+    // so the pinned totals moved by four; the write count moves with them because all four write.
+    // T-32 Step 3 (2026-11-19) adds four perception capabilities (sense_host, state, dismiss_alert,
+    // revoke_suppression), so the pinned totals move by four and the read/write split with them.
+    // T-34 Step 3 (2026-11-19) adds one owner-only write, `briefing.acknowledge`, so the pinned totals
+    // move by one.
+    // T-35 Step 2 (2026-11-19) adds three owner-only writes - `presence.handoff.stage`, `.claim` and
+    // `.revoke` - so the pinned totals move by three and the write count with them.
+    // T-36 Step 1 (2026-11-21) adds two capabilities: the owner-only write `system.bootstrap` and
+    // the read `system.bootstrap_status`, so the pinned totals move by two and the write count by one.
+    // T-37 Step 1 (2026-11-21) adds three: the owner-only writes `neural.step` and
+    // `neural.bridge_reset`, and the read `neural.read`. Track 2 can advance a simulation and read
+    // it back; it authorizes nothing, so it adds no capability that could name another one.
+    // T-38 Step 2 (2026-11-21) adds five: the reads `workspace.inspect` and `workspace.read_file`, and
+    // the owner-only sandbox writes `workshop.stage_file`, `workshop.verify_file` and
+    // `workshop.promote_file`. They are registered whether or not a workspace root is configured, and
+    // both totals move by five; an inspector with no root reports WORKSPACE_UNAVAILABLE rather than
+    // disappearing from the inventory, so the absence is visible instead of silent.
+    // T-39 Step 1 (2026-11-22) adds two owner-only writes: `workshop.apply_file` and
+    // `workshop.rollback_file`. They are registered whether or not a workspace root is configured -
+    // without one they refuse with WORKSPACE_UNAVAILABLE - so both totals move by two. They add no
+    // capability that could name another one: an apply writes one file, and a rollback restores it.
+    // T-40 adds three more, for the same reason: `workshop.check_applied` (an owner read of the files
+    // an apply wrote), and `workshop.apply_changeset` / `workshop.rollback_changeset` (two owner-only
+    // writes for the all-or-nothing batch). All three are registered with or without a root and refuse
+    // there with WORKSPACE_UNAVAILABLE, so both totals move by three.
+    // T-41 Step 3 (2026-11-22) adds one owner-only write, `evolution.stage_to_workshop`. It is
+    // registered whether or not a workspace root is configured (without one it refuses with
+    // WORKSPACE_UNAVAILABLE), so both totals move by one.
+    // T-43 Package 1 (2026-11-19) adds four git capabilities: two reads and two owner-only writes.
+    // All four are registered only with a root, because without one there is no repository this build
+    // is authorized to read - so the default total moves by zero and the rooted total by four.
+    // T-43 Package 2 adds two host reads, `system.inspect_ports` and `system.inspect_processes`. They
+    // need no workspace root - they read the machine - so both totals move by two.
+    // T-44 Package 1 (2026-11-19) adds seven capabilities to both totals: the three ledger writes
+    // (`standing_order.create`, `.toggle`, `.revoke`), the run write `standing_order.invoke`, the L0
+    // evaluation read `standing_order.evaluate`, and two reads that already had a service behind them
+    // but no capability name - `system.doctor` and `briefing.compile`, which exist so a standing order
+    // can delegate them through the one execution path rather than a second, unaudited one.
+    // T-44 Package 2 adds four agenda capabilities: the read `agenda.list` and three owner-only writes -
+    // `agenda.create`, `.complete` and `.dismiss`. All four need no workspace root, so both totals move
+    // by four and the read/write split with them.
+    // T-45 Packages 1 and 2 (2026-11-19) add eight capabilities to both totals: two playbook reads
+    // (`playbook.catalog` and the plain `playbook.read` the router uses), the L2 write `playbook.launch`,
+    // the read `watchpoint.list`, the three owner-only watchpoint writes (`create`, `toggle`, `delete`)
+    // and the L1 `watchpoint.evaluate`. All eight register without a workspace root, because a watchpoint's
+    // measurements and a playbook's steps each handle the absent-repository case themselves rather than
+    // being un-registered - so both totals move by eight.
+    assert.equal(plain.registry.list().length, 191, 'the default registry has 191 actions');
     const rooted = appWith(tempDir(), plain.dataDir);
+    assert.equal(rooted.registry.list().length, 210, 'a configured workspace root adds nineteen actions');
     assert.deepEqual(
       [...rooted.registry.names()],
       [...plain.registry.names(), 'filesystem.list', 'filesystem.read', 'filesystem.find',
         'filesystem.summarize', 'filesystem.extract', 'filesystem.compare', 'filesystem.report', 'filesystem.write',
         'filesystem.mkdir', 'filesystem.move', 'filesystem.delete', 'filesystem.restore',
-        'filesystem.trash', 'filesystem.batch', 'deadline.import'].sort(),
-      'a configured root adds exactly the two inspection actions, the eleven workspace capabilities, and the deadline import',
+        'filesystem.trash', 'filesystem.batch', 'deadline.import',
+        'git.status_detailed', 'git.diff_inspect', 'git.checkpoint_create', 'git.checkpoint_restore'].sort(),
+      'a configured root adds exactly the two inspection actions, the eleven workspace capabilities, the deadline import, and the four git capabilities',
     );
     const documented = inventoryRows().flatMap((row) => row.names);
     for (const name of rooted.registry.names()) {
@@ -142,8 +196,43 @@ describe('AF-19: the registry is the inventory', () => {
   test('no write action is offered to the model origin anywhere in the registry', () => {
     const app = appWith(tempDir(), tempDir());
     const writes = app.registry.list().filter((d) => d.permission === 'write');
-    // Council actions are read actions, so the write count is unchanged.
-    assert.equal(writes.length, 69, 'the inventory counts sixty-nine write actions with a root configured');
+    // T-30 (2026-11-19) supersedes the prior 69-write count: Workshop adds one user-only compose
+    // write, and T-29 adds `cognition.run`, which is owner-only and unplannable.
+    // T-34 Step 3 (2026-11-19): `briefing.acknowledge` is the eighty-first write, and it is owner-only
+    // like every other write in this list.
+    // T-36 Step 1 (2026-11-21): `system.bootstrap` is the eighty-fifth write, and it is owner-only
+    // like every other write in this list.
+    // T-37 Step 1 (2026-11-21): `neural.step` and `neural.bridge_reset` are the eighty-sixth and
+    // eighty-seventh. Both are owner-only for the same reason: a model that could step the substrate
+    // could manufacture the candidate associations it is then asked to consider.
+    // T-38 Step 2 (2026-11-21): the three sandbox writes are the eighty-eighth, eighty-ninth and
+    // ninetieth. All three are owner-only: staging and verifying a candidate are the owner's acts, and
+    // a model that could stage and verify could manufacture a passing check for its own content.
+    // T-39 Step 1 (2026-11-22): `workshop.apply_file` and `workshop.rollback_file` are the
+    // ninety-first and ninety-second. Both are owner-only for the strongest version of the same
+    // reason: a model that could apply could write into the owner's real tree, and a model that could
+    // roll back could undo the owner's accepted change.
+    // T-40 Step 2 (2026-11-22): `workshop.apply_changeset` and `workshop.rollback_changeset` are the
+    // ninety-third and ninety-fourth. Both are owner-only for the same reason the single-file writes
+    // are, and more so: a model that could assemble a batch could write many files in one authorized-
+    // looking act.
+    // T-41 Step 3 (2026-11-22): `evolution.stage_to_workshop` is the ninety-fifth. It is owner-only for
+    // the same reason as the other evolution acts and one sharper one: a model that could stage a
+    // proposal into the Workshop could put its own bytes where the applier reads, and the boundary
+    // policy would be the only thing between it and the tree.
+    // T-43 Package 1 (2026-11-19): `git.checkpoint_create` and `git.checkpoint_restore` are the
+    // ninety-sixth and ninety-seventh. Both are owner-only for the same reason the Workshop applies
+    // are: the first writes a ref into the owner's repository, and the second overwrites tracked files
+    // in the owner's working tree. A model that could do either could move the ground an apply lands on.
+    // T-44 Package 1: the four standing-order writes (`create`, `toggle`, `revoke`, `invoke`) are the
+    // ninety-eighth through a hundred and first. All four are owner-only: an order is a standing
+    // permission, and only the owner may write one, change one, or ask for one to run now.
+    // T-44 Package 2: `agenda.create`, `.complete` and `.dismiss` are the hundred and second through
+    // hundred and fourth. All three are owner-only: a commitment is the owner's own statement of intent.
+    // T-45 Packages 1 and 2 add five writes: `playbook.launch` (L2), and `watchpoint.create`, `.toggle`,
+    // `.delete` (L2) and `.evaluate` (L1). All five are owner-only - a routine and a threshold are the
+    // owner's own standing instructions, and a model may not write either.
+    assert.equal(writes.length, 109, 'the inventory counts one hundred and nine write actions with a root configured');
     for (const def of writes) {
       assert.deepEqual([...def.origins], ['user'], `${def.name} must be user-origin only`);
       assert.equal(app.registry.authorize(def.name, 'model').decision, 'deny', `${def.name} must deny a model origin`);
@@ -190,6 +279,13 @@ describe('AF-19: the registry is the inventory', () => {
       goal: g.result.data.goalId, outcome: 'the gate state is remembered',
       steps: [{ id: 's1', description: 'remember the gate', action: 'memory.add', input: { content: 'the gate is open' }, dependsOn: [], expectedResult: 'the fact is stored', verification: 'read it back', risk: 'medium' }],
     }, 'user', 'seed8');
+    // T-30 (2026-11-19): the four Workshop reads need a real stored design to inspect.
+    const workshopSeed = await c.runAction('workshop.compose', {
+      title: 'Inventory design', domain: 'plan',
+      components: [{ id: 'source', kind: 'service', supply: 2, demand: 0, cost: 1 },
+        { id: 'sink', kind: 'service', supply: 0, demand: 1, cost: 1 }],
+      connections: [{ from: 'source', to: 'sink' }], budget: { total: 2 },
+    }, 'user', 'seed-workshop');
     assert.equal(seeded.outcome, 'success_verified');
     assert.equal(kn.outcome, 'success_verified');
     assert.equal(ex.outcome, 'success_verified');
@@ -198,6 +294,8 @@ describe('AF-19: the registry is the inventory', () => {
     assert.equal(wf.outcome, 'success_verified');
     assert.equal(g.outcome, 'success_verified', g.summary);
     assert.equal(gp.outcome, 'success_verified', gp.summary);
+    assert.equal(workshopSeed.outcome, 'success_verified', workshopSeed.summary);
+    const workshopId = workshopSeed.result.data.artifactId;
     // The governance reads need an adaptation to answer about, so the probe derives and approves one
     // from two distinct corrected experiences. These seeds predate the snapshot below, which is what
     // makes "a read wrote nothing" measurable rather than assumed.
@@ -226,8 +324,17 @@ describe('AF-19: the registry is the inventory', () => {
     const memoryLines = fs.readFileSync(path.join(dir, 'memory.jsonl'), 'utf8').trim().split('\n').length;
     const experienceLines = fs.readFileSync(path.join(dir, 'experiences.jsonl'), 'utf8').trim().split('\n').length;
     const reads = app.registry.list().filter((d) => d.permission === 'read');
-    // T-25: 5 council read actions added (deliberate, list, get, replay, compare).
-    assert.equal(reads.length, 80, 'the inventory counts eighty read actions with a root configured');
+    // T-30 (2026-11-19) supersedes the prior 80-read count: Workshop adds list/get/inspect/simulate.
+    // T-36 Step 1 (2026-11-21): `system.bootstrap_status` is the eighty-sixth read.
+    // T-37 Step 1 (2026-11-21): `neural.read` is the eighty-seventh.
+    // T-38 Step 2 (2026-11-21): `workspace.inspect` and `workspace.read_file` are the eighty-eighth and
+    // eighty-ninth reads. Both are offered to the model origin, because reading a workspace is not
+    // authoring one - and both are refused outside the configured root.
+    // T-43 Package 1 adds two reads, `git.status_detailed` and `git.diff_inspect`; Package 2 adds two
+    // more, `system.inspect_ports` and `system.inspect_processes`.
+    // T-45 adds three reads: `playbook.catalog`, `playbook.read` and `watchpoint.list`. All three are
+    // owner-only, for the same reason the writes are.
+    assert.equal(reads.length, 101, 'the inventory counts one hundred and one read actions with a root configured');
     for (const def of reads) {
       const input = {
         'calc.evaluate': { expression: '2+2' },
@@ -237,6 +344,10 @@ describe('AF-19: the registry is the inventory', () => {
         'experience.compare': { aSince: '2026-01-01', bSince: '2026-06-01' },
         'prediction.show': { target: pr.result.data.id },
         'prediction.history': { target: pr.result.data.id },
+        // T-38 Step 2 (2026-11-21): the two workspace reads. The probe's app is rooted at the temporary
+        // workspace, so both run against a real tree and neither may change a byte of it.
+        'workspace.inspect': { maxEntries: 20 },
+        'workspace.read_file': { path: 'session.json' },
         'filesystem.list': { path: '.' },
         'filesystem.read': { path: 'session.json' },
         'filesystem.find': { path: '.', extension: 'json' },
@@ -281,6 +392,11 @@ describe('AF-19: the registry is the inventory', () => {
         'council.get': { sessionId: 'council-test-probe', _skip: true },
         'council.replay': { sessionId: 'council-test-probe', _skip: true },
         'council.compare': { a: 'council-test-probe', b: 'council-test-probe', _skip: true },
+        // T-30 (2026-11-19): Workshop reads operate on the artifact seeded before the snapshot.
+        'workshop.list': { limit: 10 },
+        'workshop.get': { artifactId: workshopId },
+        'workshop.inspect': { artifactId: workshopId },
+        'workshop.simulate': { artifactId: workshopId },
       }[def.name] ?? {};
       // Skip actions that require pre-existing data (council.get/replay/compare with fake IDs).
       if (input._skip) continue;
@@ -383,13 +499,109 @@ describe('AF-19: capture eligibility is a classification, not a guess', () => {
       if (!def) continue;
       assert.equal(row.class, def.permission, `${name}: the README class disagrees with the registry`);
       assert.equal(row.origins, def.origins.length === 1 ? 'user' : 'user + model', `${name}: README origins`);
-      // Every APEX write except the filesystem writes and the note writes changes cognitive state.
-      // A file write or a directory lifecycle change acts on the configured workspace, a note is the
-      // user's own text in its own log, and an export writes a copy outside the data directory: none
-      // is a belief or an intention APEX reasons from, so each says so instead of being counted as a
-      // belief change. A restore replaces the belief stores, so it is counted.
+      // [T-30, 2026-11-19] The earlier rule that every non-filesystem/non-note write changed
+      // cognitive state is superseded: Workshop stores a user design, not a belief or intention.
+      // Filesystem changes, notes, exports and Workshop designs are each stated separately.
       if (name === 'backup.export') {
         assert.equal(row.belief, 'no (a copy is not a belief)', `${name}: README belief-state`);
+      } else if (name === 'workshop.compose') {
+        assert.equal(row.belief, 'no (a design is not a belief)', `${name}: README belief-state`);
+      } else if (name === 'workshop.verify' || name === 'workshop.promote') {
+        // [T-33 Step 3, 2026-11-19] A sandbox verification records a check of the user's own sheet and
+        // a promotion records the user's decision to accept it. Neither is a belief about the world,
+        // and neither can change what APEX is permitted to do.
+        assert.equal(row.belief, name === 'workshop.verify' ? 'no (a check is not a belief)' : 'no (accepting a design does not make it true)', `${name}: README belief-state`);
+      } else if (name === 'workshop.stage_file' || name === 'workshop.verify_file' || name === 'workshop.promote_file') {
+        // [T-38 Step 2, 2026-11-21] The file-backed sandbox records a proposed change, the real
+        // parser's verdict on it, and the owner's decision to accept it. A proposal is not a belief
+        // about the world, and none of the three can write the workspace or change what APEX may do.
+        const stated = name === 'workshop.stage_file' ? 'no (a proposal is not a belief)'
+          : name === 'workshop.verify_file' ? 'no (a check is not a belief)'
+            : 'no (accepting a candidate does not make it true)';
+        assert.equal(row.belief, stated, `${name}: README belief-state`);
+      } else if (name === 'workshop.check_applied') {
+        // [T-40 Step 1, 2026-11-22] Re-reading the applied files measures what is on disk now. That is
+        // an observation and it is not recorded as a belief: the next check re-measures it, and a
+        // value that is derived on demand must not be stored as though it were knowledge.
+        assert.equal(row.belief, 'no (a re-reading is an observation, not a belief)', `${name}: README belief-state`);
+      } else if (name === 'workshop.apply_changeset' || name === 'workshop.rollback_changeset') {
+        // [T-40 Step 2, 2026-11-22] A batch writes files and records their digests, and a batch rollback
+        // restores them. Neither records a belief: what the files contain is the owner's artifact, and
+        // the identical argument that held for one file does not become weaker for eight.
+        assert.equal(row.belief, name === 'workshop.apply_changeset'
+          ? 'no (writing files is not a belief)'
+          : 'no (undoing a batch is not a belief)', `${name}: README belief-state`);
+      } else if (name === 'workshop.apply_file' || name === 'workshop.rollback_file') {
+        // [T-39 Step 1, 2026-11-22] These two change a file on disk and record the digests, which is
+        // an account of what happened. Neither writes a belief: a file in the workspace is the
+        // owner's artifact, and no belief-state column describes whether its content is true.
+        assert.equal(row.belief, name === 'workshop.apply_file'
+          ? 'no (writing a file is not a belief)'
+          : 'no (undoing a write is not a belief)', `${name}: README belief-state`);
+      } else if (name.startsWith('git.')) {
+        // [T-43 Package 1, 2026-11-19] A git read reports the repository as it is, and a checkpoint
+        // records a snapshot of the owner's tracked files. Neither says what APEX holds to be true
+        // about the world: a commit SHA is an identifier, not a proposition.
+        assert.equal(row.belief, 'no', `${name}: README belief-state`);
+      } else if (name.startsWith('evolution.')) {
+        // [T-31 Step 2, 2026-11-19] The lab appends proposals, measured sandbox results and the
+        // owner's promotion decisions to its own ledger. A candidate self-change is not a belief
+        // about the world, and the ledger cannot change behaviour on its own.
+        assert.equal(row.belief, 'no (a candidate self-change is not a belief)', `${name}: README belief-state`);
+      } else if (name === 'cognition.run') {
+        // [T-29, 2026-11-19] A cognitive run writes its own trace and the governed task it created;
+        // both record what happened, not what APEX believes. The store it writes is an account, and
+        // the model/knowledge/world writes it may cause are separate authorized steps.
+        assert.equal(row.belief, 'no (a run record is an account, not a belief)', `${name}: README belief-state`);
+      } else if (name === 'briefing.acknowledge') {
+        // [T-34 Step 3, 2026-11-19] Acknowledging a briefing appends the reading it compared against to
+        // its own checkpoint log. That is a comparison of two readings, not a belief about the world,
+        // and the checkpoint authorizes nothing.
+        assert.equal(row.belief, 'no (a checkpoint is a reading, not a belief)', `${name}: README belief-state`);
+      } else if (name.startsWith('presence.handoff.')) {
+        // [T-35 Step 2, 2026-11-19] An envelope says where work should continue and who may collect
+        // it; the ledger records the staging, the claim and the revocation. None of that is a claim
+        // about the world, and the envelope authorizes nothing it names.
+        assert.equal(row.belief, 'no (a destination is not a belief)', `${name}: README belief-state`);
+      } else if (name.startsWith('system.bootstrap')) {
+        // [T-36 Step 1, 2026-11-21] A cold-start bootstrap records what the machine and the
+        // repository said at that moment and enrols the workstation. It is a reading and a
+        // registry, not a belief about the world, and it authorizes nothing it names.
+        assert.equal(row.belief, def.permission === 'write' ? 'no (a machine reading is not a belief)' : 'no', `${name}: README belief-state`);
+      } else if (name.startsWith('neural.')) {
+        // [T-37 Step 1, 2026-11-21] Track 2 steps a deterministic spiking simulation and reads it back.
+        // A spike is a candidate association about its own substrate, not a claim about the world: it
+        // cannot authorize an action and it cannot write an observed fact. The bridge reset moves an
+        // in-memory breaker, which is a declaration of translator status rather than a belief.
+        assert.equal(row.belief, def.permission === 'write' ? 'no (a spike is not a belief)' : 'no', `${name}: README belief-state`);
+      } else if (name.startsWith('perception.')) {
+        // [T-32 Step 3, 2026-11-19] Perception appends host and workspace readings to its own ledger
+        // and records the Sentinel's push discipline. A CPU reading is an observation about this
+        // machine, not a belief about the world, and the governor's rules are bookkeeping about
+        // notices; neither may be read as a stored belief.
+        assert.equal(row.belief, def.permission === 'write' ? 'no (a reading is not a belief)' : 'no', `${name}: README belief-state`);
+      } else if (name.startsWith('agenda.')) {
+        // [T-44 Package 2, 2026-11-19] A commitment records what the owner intends to do and when they
+        // mean to do it. That is an intention, exactly as a goal is, not a belief about the world.
+        assert.equal(row.belief, def.permission === 'write' ? 'no (a commitment is an intention, not a belief)' : 'no', `${name}: README belief-state`);
+      } else if (name.startsWith('standing_order.')) {
+        // [T-44 Package 1, 2026-11-19] The order ledger records what the owner delegated: which
+        // capability may run, on which event, within which cooldown and rate limit. That is an
+        // intention exactly as a goal or a plan is, not a belief about the world, and the run count is
+        // a count of acts rather than a claim about anything.
+        assert.equal(row.belief, def.permission === 'write' ? 'no (an order is an intention, not a belief)' : 'no', `${name}: README belief-state`);
+      } else if (name.startsWith('playbook.')) {
+        // [T-45 Package 1, 2026-11-19] The run ledger records which routine was launched, its three steps,
+        // each step's dependency and the operation it recorded. That is an account of what was asked for
+        // and what happened, not a proposition about the world - and the run authorizes nothing: every
+        // step inside it was separately authorized by the ECP.
+        assert.equal(row.belief, def.permission === 'write' ? 'no (a routine is an intention, not a belief)' : 'no', `${name}: README belief-state`);
+      } else if (name.startsWith('watchpoint.')) {
+        // [T-45 Package 2, 2026-11-19] A watchpoint records a threshold the owner set, and an evaluation
+        // records the number it measured against it. That number is an observation about this machine,
+        // not a belief about the world, and a breach triggers nothing: a monitor that acted would be a
+        // standing order wearing a monitor's name, and that is governed by a much stricter rule.
+        assert.equal(row.belief, def.permission === 'write' ? 'no (a threshold is an intention, not a belief)' : 'no', `${name}: README belief-state`);
       } else if (def.permission === 'write' && !name.startsWith('filesystem.') && !name.startsWith('note.')) {
         assert.equal(row.belief, 'yes', `${name}: README belief-state`);
       } else if (def.permission === 'read') {

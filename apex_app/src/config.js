@@ -102,6 +102,17 @@ function intEnv(env, name, fallback, min, max) {
   return n;
 }
 
+// `undefined`/absent means "not configured". Any other value must be a real secret.
+function stepUpTokenEnv(env) {
+  const raw = env.APEX_STEP_UP_TOKEN;
+  if (raw === undefined || raw === null || String(raw) === '') return null;
+  const value = String(raw);
+  if (value.length < 16) {
+    throw new ValidationError('APEX_STEP_UP_TOKEN must be at least 16 characters when it is set', 'INVALID_CONFIG');
+  }
+  return value;
+}
+
 function autonomyLevelsEnv(env) {
   const raw = (env.APEX_AUTONOMY_LEVELS || '').trim();
   if (!raw) return {};
@@ -237,6 +248,11 @@ export function loadConfig(env = process.env) {
     },
     contextTurns: intEnv(env, 'APEX_CONTEXT_TURNS', 6, 0, 50),
     autonomyByDomain: autonomyLevelsEnv(env),
+    // T-31 Step 3: an optional step-up secret for the two acts that undo a safety control or change
+    // APEX's own behaviour. Unset means step-up is not configured, and the ECP reports that rather
+    // than treating an empty value as a proof. A configured secret shorter than 16 characters is a
+    // configuration error, not a silently weaker gate.
+    stepUpToken: stepUpTokenEnv(env),
     experienceCapture,
     filesystem: {
       root: filesystemRoot,

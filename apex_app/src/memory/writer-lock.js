@@ -49,6 +49,7 @@
 // different: the section was exclusive, the record is safe, and the lingering claim names a live
 // pid that other writers see and wait on. It is left in place rather than reported as a lost
 // write, and it is visible in `state()` and recoverable once the holder exits.
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -74,6 +75,23 @@ export const WRITE_LOCK_RETRY_MAX_MS = 250;
 // write is better than the alternative of waiting inside a release.
 const CLAIM_REMOVAL_ATTEMPTS = 3;
 const CLAIM_REMOVAL_RETRY_MS = 10;
+const ACTIVE_WRITER_LOCKS = new AsyncLocalStorage();
+
+// A low-level append may be called from inside a store's read-modify-write lock. It reuses that
+// same lock rather than trying to acquire it recursively; direct JsonlStore appends acquire their
+// own lock. This context is process-local bookkeeping only. Cross-process exclusion remains the
+// lock file protocol above.
+export function isWriterLockHeld(filePath) {
+  const held = ACTIVE_WRITER_LOCKS.getStore();
+  return held instanceof Set && held.has(path.resolve(filePath));
+}
+
+export function runWithWriterLockContext(filePath, fn) {
+  const inherited = ACTIVE_WRITER_LOCKS.getStore();
+  const held = new Set(inherited instanceof Set ? inherited : []);
+  held.add(path.resolve(filePath));
+  return ACTIVE_WRITER_LOCKS.run(held, fn);
+}
 
 export class WriterLock {
   // `now` deliberately defaults to real wall time and is not the store's injected clock: the
@@ -115,7 +133,7 @@ export class WriterLock {
     const body = await this.#acquire();
     let value;
     try {
-      value = await fn();
+      value = await runWithWriterLockContext(this.filePath, fn);
     } catch (err) {
       // The caller's failure is the report. A lingering claim of ours is inert bookkeeping that
       // the next writer takes over, so it must not replace the error that explains the refusal.

@@ -34,6 +34,32 @@ function validateReason(value) {
   }
   return value.trim();
 }
+// The metadata is a small, bounded, printable object. Anything else - a function, an array, a
+// number that is not finite - is refused rather than coerced, because a device description that
+// cannot be read back is not a description.
+const METADATA_KEYS = Object.freeze([
+  'deviceId', 'kind', 'hostname', 'platform', 'arch', 'capability', 'enrolledBy',
+]);
+function normalizeMetadata(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new ValidationError('device metadata must be an object');
+  }
+  const out = {};
+  for (const key of Object.keys(value)) {
+    if (!METADATA_KEYS.includes(key)) {
+      throw new ValidationError(`unexpected device metadata field: ${key}`);
+    }
+    const entry = value[key];
+    if (entry === undefined || entry === null) continue;
+    if (typeof entry !== 'string' || entry.length > 120 || /[\r\n\0]/.test(entry)) {
+      throw new ValidationError(`device metadata ${key} must be printable text of at most 120 characters`);
+    }
+    out[key] = entry;
+  }
+  return Object.keys(out).length === 0 ? null : Object.freeze(out);
+}
+
 function eventHash(event) {
   const { hash, ...body } = event;
   return sha256(canonical(body));
@@ -47,6 +73,11 @@ function validateEvent(event, previousHash, sequence) {
     return false;
   }
   if (event.type === 'enrolled' && (!HEX_256.test(event.secretHash ?? '') || typeof event.label !== 'string')) return false;
+  // T-36 Step 1: an enrollment may carry a metadata object - the hostname, the platform, the
+  // capability the device has. It is part of the hashed body, so it cannot be edited afterwards
+  // without breaking the chain, and it is optional: an enrollment without it stays valid.
+  if (event.metadata !== undefined && event.metadata !== null
+    && (typeof event.metadata !== 'object' || Array.isArray(event.metadata))) return false;
   if (event.type === 'revoked' && (typeof event.reason !== 'string' || typeof event.priorSecretHash !== 'string')) return false;
   if (event.type === 'message_accepted' && (!Number.isSafeInteger(event.deviceSequence) || event.deviceSequence < 1)) return false;
   return true;
@@ -83,7 +114,7 @@ export class DeviceTrustService {
       if (!validateEvent(event, previousHash, i + 1)) throw new StoreError(`device registry integrity failure at line ${i + 1}`);
       if (event.type === 'enrolled') {
         if (devices.has(event.deviceId)) throw new StoreError(`duplicate device enrollment at line ${i + 1}`);
-        devices.set(event.deviceId, { deviceId: event.deviceId, label: event.label, secretHash: event.secretHash, enrolledAt: event.at, revokedAt: null, revocationReason: null, lastSequence: 0 });
+        devices.set(event.deviceId, { deviceId: event.deviceId, label: event.label, secretHash: event.secretHash, metadata: event.metadata ?? null, enrolledAt: event.at, revokedAt: null, revocationReason: null, lastSequence: 0 });
       } else if (event.type === 'revoked') {
         const prior = devices.get(event.deviceId);
         if (!prior || prior.revokedAt || prior.secretHash !== event.priorSecretHash) throw new StoreError(`invalid device revocation at line ${i + 1}`);
@@ -123,6 +154,7 @@ export class DeviceTrustService {
     this.#events.push(event);
     if (type === 'enrolled') this.#devices.set(fields.deviceId, {
       deviceId: fields.deviceId, label: fields.label, secretHash: fields.secretHash,
+      metadata: fields.metadata ?? null,
       enrolledAt: event.at, revokedAt: null, revocationReason: null, lastSequence: 0,
     });
     if (type === 'revoked') {
@@ -134,17 +166,26 @@ export class DeviceTrustService {
     return event;
   }
 
-  async enroll({ origin, label, deviceId = this.#idFactory() } = {}) {
+  // T-36 Step 1: `metadata` is optional and bounded. It is the device's own description of itself
+  // - the hostname, the platform, the capability it holds - and it is hashed into the chain with
+  // everything else, so it cannot be rewritten after the fact without detection.
+  async enroll({ origin, label, deviceId = this.#idFactory(), metadata = null } = {}) {
     if (origin !== 'user') throw new ValidationError('device enrollment requires explicit user origin');
     validateId(deviceId, 'deviceId');
     if (typeof label !== 'string' || label.trim().length < 1 || label.length > 80 || /[\r\n\0]/.test(label)) {
       throw new ValidationError('device label must be 1-80 printable characters');
     }
+    const described = normalizeMetadata(metadata);
     await this.#load();
     if (this.#devices.has(deviceId)) throw new ValidationError('deviceId has already been enrolled');
     const secret = randomBytes(32).toString('base64url');
-    await this.#append('enrolled', { deviceId, label: label.trim(), secretHash: sha256(Buffer.from(secret, 'base64url')) });
-    return Object.freeze({ deviceId, secret, secretShownOnce: true, status: 'trusted' });
+    await this.#append('enrolled', {
+      deviceId,
+      label: label.trim(),
+      secretHash: sha256(Buffer.from(secret, 'base64url')),
+      ...(described === null ? {} : { metadata: described }),
+    });
+    return Object.freeze({ deviceId, secret, secretShownOnce: true, status: 'trusted', metadata: described });
   }
 
   async revoke(deviceId, { origin, reason } = {}) {
@@ -168,6 +209,8 @@ export class DeviceTrustService {
       revokedAt: d.revokedAt, revocationReason: d.revocationReason,
       status: d.revokedAt ? 'revoked' : 'trusted',
       lastAcceptedSequence: d.lastSequence,
+      // T-36 Step 1: the device's own description of itself, when it was given one.
+      metadata: d.metadata ?? null,
     });
   }
 
