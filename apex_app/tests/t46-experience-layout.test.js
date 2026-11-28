@@ -384,3 +384,124 @@ describe('T-46: the measuring instrument is checked as code, not only as a run',
     }
   });
 });
+
+describe('T-46 STEP 2: the boot sequence is per session, skippable, and bounded', () => {
+  // The brief: runs from REAL sources, finishes inside 4 s, is skippable by any key or ?quick=1,
+  // respects reduced motion, does not flash faster than 3 Hz, and must never mask a Degraded or an SSE
+  // failure. The geometry is in the browser walk; these are the decisions, pinned where they are cheap.
+  test('the sequence is once per session, and the marker is written when it starts', () => {
+    assert.match(UI_CLIENT, /function bootSessionKey\(\)/);
+    assert.match(UI_CLIENT, /sessionStorage\.setItem\(bootSessionKey\(\), '1'\)/);
+    // Written at START, not at the end: a sequence that fails must not be retried in a loop on the next
+    // read, and the failure is already on screen with the readings the doctor can give.
+    const start = UI_CLIENT.indexOf('markBootSession();');
+    const run = UI_CLIENT.indexOf("trigger: 'session start', maskCore: false");
+    assert.ok(start > 0 && run > start, 'the marker is written before the session-start sequence runs');
+  });
+
+  test('?quick=1, ?boot=0 and reduced motion all skip it, and ?boot=1 forces it', () => {
+    assert.match(UI_CLIENT, /if \(query\.get\('quick'\) === '1'\) return 'quick';/);
+    assert.match(UI_CLIENT, /if \(query\.get\('boot'\) === '0'\) return 'off';/);
+    assert.match(UI_CLIENT, /if \(state\.reducedMotion\) return 'reduced-motion';/);
+    assert.match(UI_CLIENT, /if \(bootSessionShown\(\)\) return 'already-shown';/);
+    // ?boot=1 is checked FIRST and returns null, so it wins over every skip.
+    const forced = UI_CLIENT.indexOf("if (query.get('boot') === '1') return null;");
+    const quick = UI_CLIENT.indexOf("if (query.get('quick') === '1') return 'quick';");
+    assert.ok(forced > 0 && forced < quick, 'the forced replay is decided before the skip reasons');
+  });
+
+  test('any key dismisses, and the keys that must not are named', () => {
+    assert.match(UI_CLIENT, /if \(state\.bootSequence\.active && event\.key && event\.key !== 'Escape'/);
+    // Escape is excluded because it has an order of operations (reference, popover, then the sequence).
+    assert.match(UI_CLIENT, /key === 'Shift' \|\| key === 'Control' \|\| key === 'Alt' \|\| key === 'Meta'/);
+    // The function-key escape: F1..F12 are the browser's, not the sequence's.
+    assert.ok(UI_CLIENT.includes('/^F([1-9]|1[0-2])$/'), 'the function-key pattern is present');
+    assert.match(UI_CLIENT, /key !== 'Tab'/);
+  });
+
+  test('four seconds is a deadline, not a hope', () => {
+    assert.match(UI_CLIENT, /const BOOT_SEQUENCE_MAX_MS = 4000;/);
+    assert.match(UI_CLIENT, /const deadline = Date\.now\(\) \+ BOOT_SEQUENCE_MAX_MS;/);
+    // The reveal pacing is clamped to what is left, so the pacing alone cannot overrun the deadline.
+    assert.match(UI_CLIENT, /Math\.min\(delay, deadline - Date\.now\(\)\)/);
+  });
+
+  test('every step state is one an owner can act on', () => {
+    // ok / degraded / failed / unavailable. "unavailable" is a real answer - a check with nothing to
+    // look at is never reported as a success.
+    for (const state of ["'ok'", "'degraded'", "'failed'", "'unavailable'"]) {
+      assert.ok(UI_CLIENT.includes(`return ${state};`), `${state} is a state a step can report`);
+    }
+  });
+
+  test('the forced failure is an ordinary failed request, not a scripted answer', () => {
+    assert.match(UI_CLIENT, /if \(bootQuery\(\)\.get\('boot'\) === 'fail'\) throw new Error\('forced failure \(\?boot=fail\)'\);/);
+    // It throws BEFORE the request, inside the same try, so the same catch produces the same failed step.
+    const forcedAt = UI_CLIENT.indexOf("=== 'fail') throw");
+    const requestAt = UI_CLIENT.indexOf("api('/api/system/bootstrap'");
+    assert.ok(forcedAt > 0 && requestAt > forcedAt, 'the forced failure precedes the real read in one try');
+  });
+
+  test('a session-start reveal may not claim the Core, so it cannot hide Degraded', () => {
+    // The Core is Dormant only while the machine is genuinely waking (unseeded, or a forced replay).
+    // The per-session reveal runs when the deck already has the owners' answer, so it is passive:
+    // maskCore false. This is the "must not mask Degraded" clause, in the one place it could be broken.
+    assert.match(UI_CLIENT, /async function runBootSequence\(\{ trigger = 'manual', maskCore = true \} = \{\}\)/);
+    assert.match(UI_CLIENT, /runBootSequence\(\{ trigger: 'session start', maskCore: false \}\)/);
+    // The projection honours the flag rather than testing the overlay's mere presence.
+    assert.match(UI_CLIENT, /state\.bootSequence\.active && state\.bootSequence\.maskCore === true/);
+    // An unseeded directory and a forced replay still mask: the machine really is waking then.
+    assert.match(UI_CLIENT, /runBootSequence\(\{ trigger: 'unseeded data directory' \}\)/);
+    assert.match(UI_CLIENT, /runBootSequence\(\{ trigger: 'owner request \(\?boot=1\)' \}\)/);
+  });
+
+  test('the session reveal is started by the first read, not before it', () => {
+    // T-36 caught the first version: starting the reveal at script load took the "a sequence is running"
+    // slot, so when the first read then reported an UNSEEDED directory the genuine wake was refused and
+    // the workstation looked awake before it had been set up. The decision and the start are the same
+    // place now, and that place is the snapshot handler.
+    assert.match(UI_CLIENT, /state\.bootSequence\.sessionReveal = true;/);
+    // The ORDER that matters is inside the snapshot handler, not in this file: the unseeded branch is
+    // tested first, and the session reveal is its else. Source positions prove nothing here - the
+    // function definition comes after its call site - so the branch order is what is asserted.
+    assert.match(UI_CLIENT,
+      /bootstrapped === false\s*&& state\.bootSequence\.triggered !== true\) \{[\s\S]{0,220}unseeded data directory[\s\S]{0,400}else if \(state\.bootSequence\.sessionReveal === true/);
+    // And an explicit request pre-empts the passive reveal; a genuine wake is never pre-empted.
+    assert.match(UI_CLIENT, /const passive = state\.bootSequence\.maskCore === false;/);
+    assert.match(UI_CLIENT, /if \(!passive\) return null;/);
+  });
+
+  test('the overlay never masks Degraded or an SSE failure', () => {
+    // The overlay is a fixed panel over the deck's bottom-left, not an opaque full-viewport modal, and
+    // the connectivity badge and the Core stay in the document and keep updating behind it.
+    assert.match(UI_CSS, /\.hud-boot \{[^}]*pointer-events: none/);
+    assert.match(UI_CSS, /\.hud-boot-panel \{[^}]*pointer-events: auto/);
+    assert.doesNotMatch(UI_CSS, /\.hud-boot \{[^}]*background: [^;]*;/,
+      'the overlay itself is transparent: it never covers the deck');
+    // The overlay is transparent and only its panel takes pointers, so a Degraded that arrives while it
+    // is up is written to the same badges underneath it. The one state the sequence does set is Dormant,
+    // and it restores it in the same pass: the Core returns to the authoritative reading.
+    assert.match(UI_CLIENT, /document\.body\.dataset\.coreState = 'dormant';/);
+    // The own-property finally block restores it; the comment text before the call is longer than a
+    // fixed window, so the window is generous rather than the assertion removed.
+    assert.match(UI_CLIENT, /finally \{[\s\S]{0,400}dismissBootSequence\(\)/);
+    // The overlay carries no background of its own anywhere, including in the mobile block.
+    assert.doesNotMatch(UI_CSS, /\n\.hud-boot \{[^}]*background/);
+  });
+
+  test('STEP 2 is gated in the browser walk, not only asserted here', () => {
+    const spec = fs.readFileSync(new URL('./e2e/t46-experience.spec.mjs', import.meta.url), 'utf8');
+    for (const label of [
+      'the boot sequence marks the session when it starts',
+      'the boot sequence reads real sources',
+      'the boot sequence finishes inside the budget',
+      'a reload in the same session does not replay the sequence',
+      '?quick=1 skips the boot sequence',
+      'a failed bootstrap read reports a failed step, not a success',
+      'reduced motion skips the boot overlay entirely',
+      'the boot overlay does not flash faster than 3 Hz',
+    ]) {
+      assert.ok(spec.includes(`'${label}'`), `the walk gates: ${label}`);
+    }
+  });
+});

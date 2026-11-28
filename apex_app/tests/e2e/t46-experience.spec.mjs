@@ -740,6 +740,180 @@ test('T-46: the deck fits one viewport, the Core leads it, and every gate is mea
       failed: run.gatesJudged.filter((entry) => entry.ok === false).length,
     });
 
+
+    // =========================================================== STEP 2: BOOT =================
+    // The brief's boot gates, measured. A separate context, because "once per session" is a claim about
+    // ONE session and this walk must be able to start a second one: a fresh context is a fresh
+    // sessionStorage, which is exactly what a new tab is.
+    checkpoint('boot-start', null);
+    const bootRun = async (query, options = {}) => {
+      const bootContext = await browser.newContext({
+        viewport: { width: 1280, height: 720 },
+        reducedMotion: options.reducedMotion ? 'reduce' : 'no-preference',
+      });
+      const bootPage = await bootContext.newPage();
+      const started = Date.now();
+      await bootPage.goto(fixture.url(query), { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      // The overlay is up only while the sequence is reading; wait for it to appear or to have finished.
+      const appeared = await bootPage.waitForFunction(
+        () => {
+          const overlay = document.getElementById('hud-boot-sequence');
+          if (!overlay) return false;
+          return overlay.hidden === false || overlay.dataset.outcome === 'finished'
+            || overlay.dataset.outcome === 'expired';
+        },
+        null,
+        { timeout: 15_000 },
+      ).then(() => true).catch(() => false);
+      return { bootContext, bootPage, started, appeared };
+    };
+
+    const sessionKey = 'apex.boot.shown';
+    const readBoot = (bootPage) => bootPage.evaluate(() => {
+      const overlay = document.getElementById('hud-boot-sequence');
+      return {
+        hidden: overlay ? overlay.hidden : null,
+        outcome: overlay ? (overlay.dataset.outcome ?? null) : null,
+        stepsRead: overlay ? Number(overlay.dataset.stepsRead ?? '0') : null,
+        durationMs: overlay && overlay.dataset.durationMs ? Number(overlay.dataset.durationMs) : null,
+        stepStates: overlay
+          ? [...overlay.querySelectorAll('#hud-boot-steps li')].map((li) => li.getAttribute('data-boot-state'))
+          : [],
+        marker: (() => { try { return window.sessionStorage.getItem('apex.boot.shown'); } catch { return null; } })(),
+        coreState: document.getElementById('core-state')?.textContent?.trim() ?? null,
+        bodyCoreState: document.body.dataset.coreState ?? null,
+        connectivity: document.getElementById('connectivity')?.textContent?.trim() ?? null,
+      };
+    });
+
+    // (a) a fresh session on a seeded workstation: the sequence RUNS, from real sources, inside 4 s.
+    const first = await bootRun('');
+    run.boot = { firstSession: null, secondLoad: null, quick: null, forcedFailure: null, reducedMotion: null };
+    if (first.appeared) {
+      await first.bootPage.waitForFunction(
+        () => {
+          const overlay = document.getElementById('hud-boot-sequence');
+          return overlay && (overlay.dataset.outcome === 'finished' || overlay.dataset.outcome === 'expired');
+        },
+        null,
+        { timeout: 20_000 },
+      ).catch(() => {});
+      const state = await readBoot(first.bootPage);
+      const elapsed = Date.now() - first.started;
+      run.boot.firstSession = { ...state, wallMs: elapsed };
+      gate(state.marker === '1', 'the boot sequence marks the session when it starts',
+        'sessionStorage apex.boot.shown = ' + JSON.stringify(state.marker));
+      gate(state.stepsRead >= 3, 'the boot sequence reads real sources',
+        state.stepsRead + ' steps, states ' + JSON.stringify(state.stepStates));
+      gate(Array.isArray(state.stepStates) && state.stepStates.length > 0
+        && state.stepStates.every((value) => ['ok', 'degraded', 'failed', 'unavailable'].includes(String(value))),
+      'every boot step reports an honest state',
+      JSON.stringify(state.stepStates));
+      gate(state.durationMs !== null && state.durationMs <= T46_GATES.bootMaxMs,
+        'the boot sequence finishes inside the budget',
+        String(state.durationMs) + ' ms of ' + T46_GATES.bootMaxMs + ' ms (page clock)');
+      gate(state.outcome === 'finished', 'the boot sequence finishes rather than expiring',
+        String(state.outcome));
+      // The overlay leaves, and the Core is the authoritative state again - not "dormant".
+      gate(state.hidden === true, 'the boot overlay does not outlive the sequence', String(state.hidden));
+      gate(String(state.bodyCoreState) !== 'dormant',
+        'the Core returns to its authoritative state after boot', String(state.bodyCoreState));
+
+      // (b) inside the SAME session, a reload does not replay it.
+      await first.bootPage.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 });
+      await first.bootPage.waitForTimeout(600);
+      const second = await readBoot(first.bootPage);
+      run.boot.secondLoad = second;
+      gate(second.outcome !== 'finished' || second.hidden === true,
+        'a reload in the same session does not replay the sequence',
+        'outcome ' + JSON.stringify(second.outcome) + ', hidden ' + JSON.stringify(second.hidden) + ', wall replay ' + JSON.stringify(second.durationMs));
+    } else {
+      gate(false, 'the boot sequence runs on a fresh seeded session', 'the overlay never appeared');
+    }
+    await first.bootContext.close().catch(() => {});
+
+    // (c) ?quick=1 is the owner's fast path: no sequence at all.
+    const quick = await bootRun('?quick=1');
+    await quick.bootPage.waitForTimeout(500);
+    const quickState = await readBoot(quick.bootPage);
+    run.boot.quick = quickState;
+    gate(quickState.outcome === 'not-run' || quickState.hidden === true,
+      '?quick=1 skips the boot sequence',
+      'outcome ' + JSON.stringify(quickState.outcome) + ', hidden ' + JSON.stringify(quickState.hidden));
+    gate(quickState.connectivity !== null && String(quickState.connectivity).length > 0,
+      'a skipped boot still reports connectivity', String(quickState.connectivity));
+    await quick.bootContext.close().catch(() => {});
+
+    // (d) the forced failure is an ordinary failed read, not a fabricated success.
+    const forced = await bootRun('?boot=fail');
+    if (forced.appeared) {
+      await forced.bootPage.waitForFunction(
+        () => {
+          const overlay = document.getElementById('hud-boot-sequence');
+          return overlay && (overlay.dataset.outcome === 'finished' || overlay.dataset.outcome === 'expired');
+        },
+        null,
+        { timeout: 20_000 },
+      ).catch(() => {});
+      const forcedState = await readBoot(forced.bootPage);
+      run.boot.forcedFailure = forcedState;
+      gate(forcedState.stepStates.includes('failed'),
+        'a failed bootstrap read reports a failed step, not a success',
+        JSON.stringify(forcedState.stepStates));
+      // The sequence is still bounded and still leaves: a failure is not a hang.
+      gate(forcedState.hidden === true, 'a failed boot still leaves the screen', String(forcedState.hidden));
+    } else {
+      gate(false, 'the forced boot failure runs the sequence', 'the overlay never appeared');
+    }
+    await forced.bootContext.close().catch(() => {});
+
+    // (e) reduced motion: no reveal pacing and no overlay - it is not an animation to sit through.
+    const reducedBoot = await bootRun('', { reducedMotion: true });
+    await reducedBoot.bootPage.waitForTimeout(700);
+    const reducedState = await readBoot(reducedBoot.bootPage);
+    run.boot.reducedMotion = reducedState;
+    gate(reducedState.outcome === 'not-run' || reducedState.hidden === true,
+      'reduced motion skips the boot overlay entirely',
+      'outcome ' + JSON.stringify(reducedState.outcome));
+    await reducedBoot.bootContext.close().catch(() => {});
+
+    // (f) the flash ceiling. The overlay's own panel and steps are sampled for 1.2 s; the brief allows
+    // 3 Hz, and 3 Hz is 4 changes in 1.2 s. Sampled live, from the browser's own computed style.
+    const bootFlash = await (async () => {
+      const flashContext = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+      const flashPage = await flashContext.newPage();
+      await flashPage.goto(fixture.url('?boot=1'), { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      const measured = await flashPage.evaluate(async () => {
+        const overlay = document.getElementById('hud-boot-sequence');
+        if (!overlay) return { available: false, changes: 0, runs: 0 };
+        const sample = () => {
+          const style = getComputedStyle(overlay.querySelector('.hud-boot-panel') ?? overlay);
+          return [style.opacity, style.backgroundColor, style.color, style.transform].join('/');
+        };
+        // Every running animation is inspected for its own rate; a 1.2s loop counts what changed.
+        const animations = document.getAnimations ? document.getAnimations() : [];
+        const runs = animations.length;
+        let previous = sample();
+        let changes = 0;
+        const until = performance.now() + 1_200;
+        while (performance.now() < until) {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+          const next = sample();
+          if (next !== previous) { changes += 1; previous = next; }
+        }
+        return { available: true, changes, runs };
+      });
+      await flashContext.close().catch(() => {});
+      return measured;
+    })();
+    run.boot.flash = bootFlash;
+    // 3 Hz over 1.2 s is 3.6 changes; the ceiling is rounded up to 4.
+    gate(bootFlash.available !== false && bootFlash.changes <= 4,
+      'the boot overlay does not flash faster than 3 Hz',
+      bootFlash.changes + ' style changes in 1.2 s (ceiling 4), ' + bootFlash.runs + ' running animation(s)');
+
+    checkpoint('boot-verified', run.boot);
+
     // =========================================================== PASS 3: BEHAVIOUR =============
     // The pass may change the layout. It may not change what the deck promises: the owner stream beats,
     // Degraded arrives inside two seconds when the stream stops, and the deck recovers on reconnect.

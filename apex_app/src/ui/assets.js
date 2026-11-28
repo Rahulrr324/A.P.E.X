@@ -40,7 +40,9 @@ export const UI_PAGE = `<!doctype html>
   <div class="hud-boot-panel">
     <p class="hud-boot-message" id="hud-boot-message">System waking and verifying readiness</p>
     <ol class="hud-boot-steps" id="hud-boot-steps"></ol>
-    <button id="hud-boot-dismiss" type="button" class="quiet small">Skip &middot; dismiss (Esc)</button>
+    <!-- T-46 STEP 2: any key dismisses. The button says so, and it is also the Tab stop, so a keyboard
+         user never has to guess. -->
+    <button id="hud-boot-dismiss" type="button" class="quiet small">Skip &middot; any key</button>
   </div>
 </div>
 <header class="topbar">
@@ -2725,7 +2727,7 @@ function applyCoreProjection(reason = '') {
   // Awaiting Approval. The owners' states are still rendered; only the Core's own claim waits.
   // A state that carries no boot sequence is simply not booting, so the read is guarded: a
   // partial projection must never throw on the way to the owners' answer.
-  if (state.bootSequence && state.bootSequence.active) {
+  if (state.bootSequence && state.bootSequence.active && state.bootSequence.maskCore === true) {
     state.core = 'dormant';
     document.body.dataset.coreState = 'dormant';
     renderSafety();
@@ -7024,6 +7026,13 @@ async function refresh() {
       && state.bootSequence.triggered !== true) {
       state.bootSequence.triggered = true;
       runBootSequence({ trigger: 'unseeded data directory' });
+    } else if (state.bootSequence.sessionReveal === true && state.bootSequence.triggered !== true) {
+      // T-46 STEP 2: a seeded directory's once-per-session reveal. Passive (maskCore false) - the deck
+      // already has the owners' answer, and this reveal may not hide it.
+      state.bootSequence.sessionReveal = false;
+      state.bootSequence.triggered = true;
+      markBootSession();
+      runBootSequence({ trigger: 'session start', maskCore: false });
     }
   } else {
     const reason = stateResult.error || 'the authoritative state read failed';
@@ -8676,6 +8685,31 @@ document.addEventListener('keydown', (event) => {
   const tag = target && target.tagName ? String(target.tagName).toUpperCase() : '';
   const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
     || (target && target.isContentEditable === true);
+  // T-46 STEP 2: ANY key dismisses the boot sequence, before any other binding sees it. The brief asks
+  // for a sequence that never traps the owner, and "press any key" is the strongest form of that: an
+  // owner who is awake does not have to find a button, and a sequence that is still reading when they
+  // touch the keyboard was not the thing they asked for.
+  //
+  // Three keys are NOT swallowed: modifier-only presses (Shift, Control, Alt, Meta - moving a hand does
+  // not dismiss a screen), F5/F12 and the other function keys (the browser's own), and Tab (the
+  // sequence has a focusable Skip control, and Tab is how a keyboard user reaches it). Those fall
+  // through to their ordinary meaning. Everything else dismisses the overlay and stops there, because
+  // the key was aimed at a screen that is no longer there.
+  // Escape is NOT part of "any key": it has an order of operations below (a reference, then the
+  // measures popover, then the sequence), and swallowing it here would close the sequence while leaving
+  // the popover open - the wrong surface, in the wrong order.
+  if (state.bootSequence.active && event.key && event.key !== 'Escape'
+    && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    const key = String(event.key);
+    const modifierOnly = key === 'Shift' || key === 'Control' || key === 'Alt' || key === 'Meta'
+      || key === 'CapsLock' || key === 'OS';
+    const functionKey = /^F([1-9]|1[0-2])$/.test(key);
+    if (!modifierOnly && !functionKey && key !== 'Tab') {
+      event.preventDefault();
+      dismissBootSequence();
+      return;
+    }
+  }
   // The chord works even from inside a field, because it is how the owner leaves one.
   if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && (event.key === 'k' || event.key === 'K')) {
     event.preventDefault();
@@ -8877,6 +8911,12 @@ const BOOT_SEQUENCE_SUBSYSTEMS = Object.freeze([
   { id: 'executive_briefing', label: 'Executive Briefing' },
 ]);
 const BOOT_SEQUENCE_STEP_DELAY_MS = 140;
+// T-46 STEP 2: the sequence is bounded. The brief's ceiling is four seconds, and it is a measurement
+// gate, not a hope: the reveal pacing alone is 6 x 140ms, so the real time is spent in the reads. This
+// cap is the deadline for the WHOLE sequence. When it passes, the overlay says so and leaves - with the
+// steps it managed to read, not with invented ones. A timeout is a reading, and the deck behind it
+// shows the authoritative state either way.
+const BOOT_SEQUENCE_MAX_MS = 4000;
 
 function bootWait(ms) {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
@@ -8919,27 +8959,56 @@ function bootStepDetail(state, detail) {
 // The sequence proper. It runs the doctor read first - the safety latch and the ECP authority
 // are known before anything is written - and then the governed bootstrap, which does the reading,
 // the enrollment and the briefing.
-async function runBootSequence({ trigger = 'manual' } = {}) {
-  if (state.bootSequence.running) return null;
+async function runBootSequence({ trigger = 'manual', maskCore = true } = {}) {
+  if (state.bootSequence.running) {
+    // T-46 STEP 2: an explicit request PRE-EMPTS a passive reveal, and never pre-empts a real wake.
+    //
+    // The once-per-session reveal is a checklist nobody asked for; if the owner clicks Run Boot
+    // Sequence, or ?boot=1, while it is still pacing, the request is the thing they meant. A genuine
+    // wake (unseeded, or a forced replay that already claimed the Core) is a reading, and a second one
+    // started over it would only fight it for the Core. So: passive yields, genuine does not.
+    const passive = state.bootSequence.maskCore === false;
+    if (!passive) return null;
+    state.bootSequence.dismissed = true;
+    state.bootSequence.running = false;
+  }
   state.bootSequence.running = true;
   state.bootSequence.active = true;
   state.bootSequence.dismissed = false;
   state.bootSequence.steps = [];
-  // The Core is Dormant for as long as the machine is waking. It is not Idle and it is not
-  // Degraded: the deck has not finished verifying its own readiness.
-  document.body.dataset.coreState = 'dormant';
-  if (els.coreCaption) els.coreCaption.textContent = 'The system is waking and verifying readiness.';
+  state.bootSequence.startedAt = Date.now();
+  state.bootSequence.expired = false;
+  // T-46 STEP 2: NOT every boot may claim the Core.
+  //
+  // The Core is Dormant for as long as the machine is genuinely waking - an unseeded directory that has
+  // not verified itself yet, or an owner who forced a replay. That is T-36's opening screen, and a deck
+  // that is waking is not Idle.
+  //
+  // The per-session reveal is different. By then the deck has authoritative reads, and a Core that says
+  // Dormant for a second is a Core that HID a Degraded, a Lockdown or an Awaiting Approval - which is
+  // the one thing this milestone forbids. So the session-start reveal is a passive checklist: it shows
+  // what it is reading, and the Core keeps the owners' answer underneath it, live and unmasked.
+  state.bootSequence.maskCore = maskCore === true;
+  if (state.bootSequence.maskCore) {
+    document.body.dataset.coreState = 'dormant';
+    if (els.coreCaption) els.coreCaption.textContent = 'The system is waking and verifying readiness.';
+  }
   if (els.bootSequence) els.bootSequence.hidden = false;
   renderBootSequenceSteps([]);
   const revealed = [];
+  const deadline = Date.now() + BOOT_SEQUENCE_MAX_MS;
+  const expired = () => Date.now() >= deadline || state.bootSequence.dismissed;
   const reveal = async (step) => {
+    if (expired()) return;
     revealed.push(step);
     state.bootSequence.steps = revealed.slice();
     renderBootSequenceSteps(revealed);
-    if (state.bootSequence.dismissed) return;
     // Reduced motion means no delay at all - not a zero-length timer. The values are identical.
     const delay = bootRevealDelay();
-    if (delay > 0) await bootWait(delay);
+    if (delay > 0) {
+      // The wait is clamped to what is left of the deadline, so the pacing can never itself overrun it.
+      await bootWait(Math.max(0, Math.min(delay, deadline - Date.now())));
+    }
   };
 
   try {
@@ -8965,6 +9034,11 @@ async function runBootSequence({ trigger = 'manual' } = {}) {
     let report = null;
     let failure = null;
     try {
+      // T-46 STEP 2: ?boot=fail makes this read fail on purpose, so the failure path can be walked in a
+      // browser rather than reasoned about. It is an ordinary failed request - the same catch, the same
+      // 'failed' step state, the same overlay copy - and it does not stub a response, so nothing here
+      // can report a reading the server did not give. It is off unless the query asks for it.
+      if (bootQuery().get('boot') === 'fail') throw new Error('forced failure (?boot=fail)');
       report = await api('/api/system/bootstrap', { method: 'POST', body: { reason: 'HUD boot sequence (' + trigger + ')' } });
     } catch (error) {
       failure = String(error?.message || error);
@@ -9013,11 +9087,13 @@ async function runBootSequence({ trigger = 'manual' } = {}) {
     });
     state.bootSequence.report = report ?? null;
     state.bootSequence.error = failure ?? null;
+    state.bootSequence.expired = Date.now() >= deadline;
   } finally {
     state.bootSequence.running = false;
     // The Core returns to its authoritative state: whatever the owners say, not what the boot
     // screen hoped for. A lockdown latch still reads as Lockdown.
     state.bootSequence.active = false;
+    state.bootSequence.finishedAt = Date.now();
     dismissBootSequence();
     await refresh();
   }
@@ -9029,8 +9105,19 @@ async function runBootSequence({ trigger = 'manual' } = {}) {
 function dismissBootSequence() {
   state.bootSequence.active = false;
   state.bootSequence.dismissed = true;
-  if (els.bootSequence) els.bootSequence.hidden = true;
-  if (els.coreCaption && document.body.dataset.coreState === 'dormant') {
+  if (els.bootSequence) {
+    els.bootSequence.hidden = true;
+    // Readable from outside the closure: a walk (and an owner with a console) can tell a finished
+    // sequence from a skipped one from an expired one. Three different events, three different words.
+    const started = state.bootSequence.startedAt;
+    els.bootSequence.dataset.outcome = state.bootSequence.expired === true ? 'expired'
+      : started === null ? 'not-run'
+        : 'finished';
+    els.bootSequence.dataset.stepsRead = String(state.bootSequence.steps.length);
+    els.bootSequence.dataset.durationMs = started === null ? '' : String(Date.now() - started);
+  }
+  if (els.coreCaption && state.bootSequence.maskCore === true
+    && document.body.dataset.coreState === 'dormant') {
     els.coreCaption.textContent = 'The system is awake.';
   }
   applyCoreProjection('The boot sequence finished; the state below is the authoritative one.');
@@ -9616,15 +9703,65 @@ boot();
 // T-36 Step 2: the boot overlay starts away. It is shown by the sequence and hidden again when the
 // sequence ends; nothing else may leave it on the page.
 if (els.bootSequence) els.bootSequence.hidden = true;
-// T-36 Step 2: ?boot=1 replays the cold-start sequence on demand, on a machine that is already
-// set up as well as on one that is not. It is the same governed bootstrap, so it refreshes the
-// readings rather than re-creating them.
-if (typeof window !== 'undefined' && window.location && window.location.search) {
-  const requested = new URLSearchParams(window.location.search).get('boot');
-  if (requested === '1') {
-    state.bootSequence.triggered = true;
-    runBootSequence({ trigger: 'owner request (?boot=1)' });
-  }
+// T-46 STEP 2 (2026-11-19): the cold-start sequence is PER SESSION.
+//
+// The reading chosen, and why: the brief says the sequence is per-session, skippable, and that it must
+// never mask a Degraded or an SSE failure. "Per session" cannot mean per page load - a refresh is the
+// same session, and replaying a four-second check on every refresh is exactly the thing an owner
+// complains about. It cannot mean per workstation either, or the first thing a returning owner sees is
+// a boot screen every morning. It means once per browser session: one marker in sessionStorage, which
+// is cleared when the tab closes and survives a reload. The marker is written when the sequence STARTS,
+// so a failed sequence is not retried in a loop - its result is already on screen and in the doctor.
+//
+// Any of these turn it OFF, and each is a named reason rather than a silent branch:
+//   ?quick=1        the owner asked for the fast path;
+//   ?boot=0         the owner asked for no sequence at all;
+//   reduced motion  the brief's "respects reduced motion": no reveal pacing, and no overlay either;
+//   already shown   this session has seen it (sessionStorage marker);
+//   unseeded        not a skip - an unseeded workstation shows it on EVERY load, because setting up a
+//                   workstation is not a per-session event and the reading is how the owner knows what
+//                   was set up. That path is the T-36 walk and is unchanged.
+//
+// ?boot=1 still forces it, on any machine, as T-36 defined.
+function bootQuery() {
+  try {
+    if (typeof window === 'undefined' || !window.location || !window.location.search) return new URLSearchParams('');
+    return new URLSearchParams(window.location.search);
+  } catch { return new URLSearchParams(''); }
+}
+function bootSessionKey() {
+  return 'apex.boot.shown';
+}
+function bootSessionShown() {
+  try { return window.sessionStorage.getItem(bootSessionKey()) === '1'; } catch { return false; }
+}
+function markBootSession() {
+  try { window.sessionStorage.setItem(bootSessionKey(), '1'); } catch { /* private mode: then it is per load */ }
+}
+function bootSkipReason() {
+  const query = bootQuery();
+  if (query.get('boot') === '1') return null;
+  if (query.get('quick') === '1') return 'quick';
+  if (query.get('boot') === '0') return 'off';
+  if (state.reducedMotion) return 'reduced-motion';
+  if (bootSessionShown()) return 'already-shown';
+  return null;
+}
+if (typeof window !== 'undefined' && bootQuery().get('boot') === '1') {
+  state.bootSequence.triggered = true;
+  markBootSession();
+  runBootSequence({ trigger: 'owner request (?boot=1)' });
+} else {
+  // The seeded-session opening is DECIDED here and STARTED by the first snapshot read, because the
+  // decision needs one fact this point in the script does not have: whether the data directory has ever
+  // been bootstrapped.
+  //
+  // The first version started the reveal here and was wrong in a way T-36 caught immediately: the
+  // session reveal takes the "a sequence is running" slot, so when the first read then reported an
+  // UNSEEDED directory, the genuine wake - the one that is allowed to claim the Core and say Dormant -
+  // was the one that got refused. The workstation looked awake before it had been set up. Order of
+  // operations, not a flag.
+  state.bootSequence.sessionReveal = true;
 }
 setInterval(refresh, 15000);
 `;
