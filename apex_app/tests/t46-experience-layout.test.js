@@ -489,6 +489,16 @@ describe('T-46 STEP 2: the boot sequence is per session, skippable, and bounded'
     assert.doesNotMatch(UI_CSS, /\n\.hud-boot \{[^}]*background/);
   });
 
+  test('the fixture URL helper handles a query, not only a path', () => {
+    // Three STEP 2 walks navigated to '/?quick=1?token=...' - a 404 with no overlay on it - because the
+    // helper concatenated every suffix as if it were a path. The gates reported the 404 as "the overlay
+    // never appeared", which is true and useless.
+    const fixtures = fs.readFileSync(new URL('./e2e/t46-fixtures.mjs', import.meta.url), 'utf8');
+    assert.match(fixtures, /suffix\.startsWith\('\?'\)/);
+    assert.match(fixtures, /\$\{base\}\/\$\{suffix\}&token=/);
+    assert.match(fixtures, /\$\{base\}\/\$\{suffix\}\?token=/);
+  });
+
   test('STEP 2 is gated in the browser walk, not only asserted here', () => {
     const spec = fs.readFileSync(new URL('./e2e/t46-experience.spec.mjs', import.meta.url), 'utf8');
     for (const label of [

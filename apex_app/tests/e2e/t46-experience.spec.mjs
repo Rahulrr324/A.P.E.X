@@ -883,14 +883,25 @@ test('T-46: the deck fits one viewport, the Core leads it, and every gate is mea
       const flashContext = await browser.newContext({ viewport: { width: 1280, height: 720 } });
       const flashPage = await flashContext.newPage();
       await flashPage.goto(fixture.url('?boot=1'), { waitUntil: 'domcontentloaded', timeout: 30_000 });
-      const measured = await flashPage.evaluate(async () => {
+      // The overlay is measured WHILE it is up, from inside the page: this waits for it to appear before
+      // it starts sampling, because the first version sampled at a fixed 600 ms and by then a fast
+      // sequence had already finished - it reported "0 changes, 0 animations" and that is a measurement
+      // of nothing, not a pass. If the overlay never appears at all, the gate says that instead.
+      const appeared = await flashPage.waitForFunction(
+        () => {
+          const overlay = document.getElementById('hud-boot-sequence');
+          return Boolean(overlay && overlay.hidden === false);
+        },
+        null,
+        { timeout: 10_000 },
+      ).then(() => true).catch(() => false);
+      const measured = appeared ? await flashPage.evaluate(async () => {
         const overlay = document.getElementById('hud-boot-sequence');
         if (!overlay) return { available: false, changes: 0, runs: 0 };
         const sample = () => {
           const style = getComputedStyle(overlay.querySelector('.hud-boot-panel') ?? overlay);
           return [style.opacity, style.backgroundColor, style.color, style.transform].join('/');
         };
-        // Every running animation is inspected for its own rate; a 1.2s loop counts what changed.
         const animations = document.getAnimations ? document.getAnimations() : [];
         const runs = animations.length;
         let previous = sample();
@@ -902,13 +913,16 @@ test('T-46: the deck fits one viewport, the Core leads it, and every gate is mea
           if (next !== previous) { changes += 1; previous = next; }
         }
         return { available: true, changes, runs };
-      });
+      }) : { available: false, changes: 0, runs: 0 };
       await flashContext.close().catch(() => {});
       return measured;
     })();
     run.boot.flash = bootFlash;
     // 3 Hz over 1.2 s is 3.6 changes; the ceiling is rounded up to 4.
-    gate(bootFlash.available !== false && bootFlash.changes <= 4,
+    gate(bootFlash.available === true,
+      'the boot overlay is on screen while its flash rate is measured',
+      bootFlash.available === true ? 'sampled while visible' : 'the overlay had already gone: nothing measured');
+    gate(bootFlash.available === true && bootFlash.changes <= 4,
       'the boot overlay does not flash faster than 3 Hz',
       bootFlash.changes + ' style changes in 1.2 s (ceiling 4), ' + bootFlash.runs + ' running animation(s)');
 

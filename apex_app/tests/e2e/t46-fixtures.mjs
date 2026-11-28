@@ -173,7 +173,12 @@ export async function startT46Ui({ token = T46_TOKEN, port = 0 } = {}) {
     lock: () => post('/api/safety/lockdown', { reason: 'T-46 walk: the latch overrides the presentation picker' }),
     release: () => post('/api/safety/release', { reason: 'T-46 walk: release fires nothing', confirm: true }),
     latchActive: () => app.registry.controlPlane.killSwitchStatus().active === true,
-    url: (suffix = '') => `${base}/${suffix}?token=${encodeURIComponent(token)}`,
+    // `suffix` is either a path ('system') or a query ('?quick=1'). The first version concatenated both as
+    // if they were paths, so three STEP 2 walks navigated to '/?quick=1?token=...' - a 404 whose page has
+    // no overlay, which the gates then reported as "the overlay never appeared".
+    url: (suffix = '') => (suffix.startsWith('?')
+      ? `${base}/${suffix}&token=${encodeURIComponent(token)}`
+      : `${base}/${suffix}?token=${encodeURIComponent(token)}`),
   };
 }
 
