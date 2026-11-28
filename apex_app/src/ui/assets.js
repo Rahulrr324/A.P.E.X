@@ -9751,6 +9751,21 @@ if (typeof window !== 'undefined' && bootQuery().get('boot') === '1') {
   state.bootSequence.triggered = true;
   markBootSession();
   runBootSequence({ trigger: 'owner request (?boot=1)' });
+} else if (bootQuery().get('boot') === 'fail') {
+  // The forced failure is a FORCED sequence: it must be the one that runs, so the passive session
+  // reveal is not scheduled beside it. (Without this it still ran, but it ran second - it lost the
+  // "a sequence is running" slot to the passive reveal, so the steps reported were the passive ones'
+  // readings and all six said ok. The gate was right: a forced failure that reports six oks is not a
+  // failure path at all.)
+  state.bootSequence.triggered = true;
+  markBootSession();
+  runBootSequence({ trigger: 'owner request (?boot=fail)', maskCore: true });
+} else if (bootSkipReason() !== null) {
+  // An owner who asked for the fast path gets it, and the reason is kept for the reading rather than
+  // being a silent branch. (This branch was missing in the first version: bootSkipReason() was written,
+  // tested for its rules, and never called - so ?quick=1 and ?boot=0 did nothing at all. The hosted walk
+  // caught it as "?quick=1 skips the boot sequence - outcome null, hidden false".)
+  state.bootSequence.skipReason = bootSkipReason();
 } else {
   // The seeded-session opening is DECIDED here and STARTED by the first snapshot read, because the
   // decision needs one fact this point in the script does not have: whether the data directory has ever

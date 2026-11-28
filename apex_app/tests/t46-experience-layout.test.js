@@ -434,6 +434,19 @@ describe('T-46 STEP 2: the boot sequence is per session, skippable, and bounded'
     }
   });
 
+  test('every skip reason is actually consulted, and a forced run owns the slot', () => {
+    // bootSkipReason() was written and pinned but NEVER CALLED in the first version, so ?quick=1 and
+    // ?boot=0 did nothing and the hosted walk said "?quick=1 skips the boot sequence - outcome null".
+    // A rule that is not called is a comment.
+    assert.match(UI_CLIENT, /\} else if \(bootSkipReason\(\) !== null\) \{/);
+    assert.match(UI_CLIENT, /state\.bootSequence\.skipReason = bootSkipReason\(\);/);
+    // A forced failure must own the slot, or the passive reveal reads all six steps first and the
+    // "failure" reports six oks - which is what the hosted run reported.
+    // The comment between the branch and the call is longer than a fixed window, so the window is
+    // generous rather than the assertion removed.
+    assert.match(UI_CLIENT, /bootQuery\(\)\.get\('boot'\) === 'fail'\) \{[\s\S]{0,700}maskCore: true \}\)/);
+  });
+
   test('the forced failure is an ordinary failed request, not a scripted answer', () => {
     assert.match(UI_CLIENT, /if \(bootQuery\(\)\.get\('boot'\) === 'fail'\) throw new Error\('forced failure \(\?boot=fail\)'\);/);
     // It throws BEFORE the request, inside the same try, so the same catch produces the same failed step.
