@@ -196,6 +196,28 @@ describe('startup and authentication', () => {
     assert.equal(bearer.status, 200, 'an Authorization header reaches the page too');
   });
 
+  test('the token exchange forwards the page parameters and never the token', async () => {
+    // T-46 STEP 2. The exchange redirected to the bare root, which silently discarded ?quick=1, ?boot=1,
+    // ?boot=0 and ?boot=fail - the page parameters an owner can type. Two hosted gates failed on it and
+    // were right: the client was told nobody had asked for anything.
+    const dir = tempDir();
+    const { base } = await uiOn(dir);
+    for (const [suffix, expected] of [
+      ['?quick=1', '/?quick=1'],
+      ['?boot=1', '/?boot=1'],
+      ['?boot=0', '/?boot=0'],
+      ['?boot=fail', '/?boot=fail'],
+      ['?quick=1&boot=0', '/?quick=1&boot=0'],
+      ['', '/'],
+    ]) {
+      const separator = suffix ? '&' : '?';
+      const response = await request(base, `/${suffix}${separator}token=${TOKEN}`);
+      assert.equal(response.status, 303, `${suffix || '(none)'} exchanges the token`);
+      assert.equal(response.headers.get('location'), expected, `${suffix || '(none)'} forwards its parameters`);
+      assert.doesNotMatch(String(response.headers.get('location')), /token/, 'the credential is not forwarded');
+    }
+  });
+
   test('the page and client reference no remote origin and never build markup from text', async () => {
     for (const asset of [UI_PAGE, UI_CLIENT]) {
       assert.doesNotMatch(asset, /https?:\/\//i, 'the interface must not point at any remote origin');

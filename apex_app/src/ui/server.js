@@ -2199,8 +2199,18 @@ export function createUiServer({
     if (method === 'GET' && url.pathname === '/') {
       const queryToken = url.searchParams.get('token');
       if (queryToken !== null && tokensMatch(queryToken, authToken)) {
+        // T-46 STEP 2: the exchange keeps the page's own parameters.
+        //
+        // The token is exchanged for a cookie by redirecting to the bare root, which was correct until the
+        // page grew parameters an owner can type: ?quick=1, ?boot=1, ?boot=0, ?boot=fail. Every one of
+        // them was silently discarded here, so the client was told a loader had asked for nothing - and
+        // two hosted gates failed on it, correctly. The token is stripped (it is a credential and it is
+        // now in a cookie) and everything else survives.
+        const forwarded = new URLSearchParams(url.searchParams);
+        forwarded.delete('token');
+        const suffix = forwarded.toString();
         res.writeHead(303, baseHeaders({
-          'location': '/',
+          'location': suffix ? `/?${suffix}` : '/',
           'set-cookie': `apex_ui=${authToken}; Path=/; HttpOnly; SameSite=Strict`,
         }));
         res.end();
